@@ -1,0 +1,1001 @@
+________________________________________
+Expanded Prompt
+Act as a Senior Full Stack Software Engineer, Senior Supabase Architect, PostgreSQL Database Administrator (DBA), Backend Engineer, Frontend Engineer, React + TypeScript Expert, UI/UX Designer, and Software Debugging Specialist.
+You are responsible for debugging, analyzing, and fixing my entire MOOVE application.
+The application uses:
+•	React + TypeScript
+•	Vite
+•	Supabase
+•	PostgreSQL
+•	Row Level Security (RLS)
+•	Supabase Authentication
+•	PostgREST API
+•	Responsive UI
+I have already designed my complete PostgreSQL database schema (attached below). Treat this schema as the single source of truth.
+________________________________________
+Primary Objective
+Perform a complete investigation of my Supabase database integration and eliminate every issue preventing the application from correctly reading and writing data.
+Do not apply quick fixes.
+Instead:
+•	determine the real root cause
+•	explain why it happens
+•	implement production-quality fixes
+•	preserve database security
+•	preserve RLS
+•	preserve data integrity
+•	ensure scalability
+________________________________________
+Database Schema
+Use the following schema as the official database architecture.
+[
+-- ============================================================
+-- MOOVE — Supabase PostgreSQL Migration
+-- Run this in the Supabase SQL Editor (Dashboard → SQL Editor)
+-- ============================================================
+
+-- ─── Extensions ──────────────────────────────────────────────────────────────
+create extension if not exists "uuid-ossp";
+
+-- ─── 1. PROFILES ─────────────────────────────────────────────────────────────
+-- Extends auth.users with app-specific profile data
+create table if not exists profiles (
+  id            uuid primary key references auth.users(id) on delete cascade,
+  name          text not null,
+  email         text not null unique,
+  role          text not null default 'driver' check (role in ('driver','admin')),
+  driving_goal  text,
+  age           text,
+  vehicle_type  text,
+  avatar_url    text,
+  joined_at     timestamptz not null default now(),
+  updated_at    timestamptz not null default now()
+);
+
+create index if not exists profiles_role_idx on profiles(role);
+
+-- Auto-update updated_at
+create or replace function update_updated_at()
+returns trigger language plpgsql as $$
+begin new.updated_at = now(); return new; end;
+$$;
+
+create trigger profiles_updated_at
+  before update on profiles
+  for each row execute function update_updated_at();
+
+-- ─── 2. USER PREFERENCES ─────────────────────────────────────────────────────
+create table if not exists user_preferences (
+  id                    uuid primary key default uuid_generate_v4(),
+  user_id               uuid not null references profiles(id) on delete cascade unique,
+  reminder_interval     text default '30',        -- minutes between break reminders
+  tired_areas           text[] default '{}',
+  reminder_style        text default 'popup' check (reminder_style in ('popup','sound','vibration','silent')),
+  notifications_enabled boolean default true,
+  warmup_pref           text default 'before',
+  theme                 text default 'light',
+  accessibility_large_text boolean default false,
+  created_at            timestamptz not null default now(),
+  updated_at            timestamptz not null default now()
+);
+
+create trigger user_preferences_updated_at
+  before update on user_preferences
+  for each row execute function update_updated_at();
+
+-- ─── 3. DRIVING SESSIONS ─────────────────────────────────────────────────────
+create table if not exists driving_sessions (
+  id                  uuid primary key default uuid_generate_v4(),
+  user_id             uuid not null references profiles(id) on delete cascade,
+  started_at          timestamptz not null default now(),
+  ended_at            timestamptz,
+  duration_seconds    int not null default 0,
+  exercises_completed int not null default 0,
+  exercises_skipped   int not null default 0,
+  breaks_taken        int not null default 0,
+  avg_sedentary_risk  text,
+  note                text,
+  created_at          timestamptz not null default now()
+);
+
+create index if not exists driving_sessions_user_idx on driving_sessions(user_id);
+create index if not exists driving_sessions_started_idx on driving_sessions(started_at desc);
+
+-- ─── 4. EXERCISE HISTORY ─────────────────────────────────────────────────────
+create table if not exists exercise_history (
+  id                uuid primary key default uuid_generate_v4(),
+  user_id           uuid not null references profiles(id) on delete cascade,
+  session_id        uuid references driving_sessions(id) on delete set null,
+  exercise_id       int not null,
+  exercise_name     text not null,
+  body_area         text,
+  sets_completed    int not null default 1,
+  duration_per_set  int not null default 30,  -- seconds
+  rest_between      int not null default 15,  -- seconds
+  context           text,  -- 'before' | 'after' | 'traffic' | 'parked'
+  status            text not null default 'completed' check (status in ('completed','skipped')),
+  completed_at      timestamptz not null default now()
+);
+
+create index if not exists exercise_history_user_idx on exercise_history(user_id);
+create index if not exists exercise_history_completed_idx on exercise_history(completed_at desc);
+
+-- ─── 5. HEALTH METRICS ───────────────────────────────────────────────────────
+create table if not exists health_metrics (
+  id            uuid primary key default uuid_generate_v4(),
+  user_id       uuid not null references profiles(id) on delete cascade,
+  recorded_at   date not null default current_date,
+  pain_level    int check (pain_level between 0 and 10),
+  energy_level  int check (energy_level between 0 and 10),
+  stress_level  int check (stress_level between 0 and 10),
+  posture_score int check (posture_score between 0 and 100),
+  notes         text,
+  created_at    timestamptz not null default now(),
+  unique (user_id, recorded_at)
+);
+
+create index if not exists health_metrics_user_idx on health_metrics(user_id);
+create index if not exists health_metrics_date_idx on health_metrics(recorded_at desc);
+
+-- ─── 6. SEDENTARY MONITORING LOGS ────────────────────────────────────────────
+create table if not exists sedentary_logs (
+  id              uuid primary key default uuid_generate_v4(),
+  user_id         uuid not null references profiles(id) on delete cascade,
+  session_id      uuid references driving_sessions(id) on delete set null,
+  logged_at       timestamptz not null default now(),
+  duration_mins   int not null,    -- continuous sedentary minutes
+  risk_level      text not null check (risk_level in ('Low','Moderate','High','Very High')),
+  alert_triggered boolean default false,
+  alert_dismissed boolean default false
+);
+
+create index if not exists sedentary_logs_user_idx on sedentary_logs(user_id);
+
+-- ─── 7. AI INSIGHTS ──────────────────────────────────────────────────────────
+create table if not exists ai_insights (
+  id              uuid primary key default uuid_generate_v4(),
+  user_id         uuid not null references profiles(id) on delete cascade,
+  generated_at    timestamptz not null default now(),
+  insight_type    text not null,  -- 'recommendation' | 'analysis' | 'alert'
+  title           text not null,
+  body            text not null,
+  tags            text[] default '{}',
+  is_read         boolean default false,
+  expires_at      timestamptz
+);
+
+create index if not exists ai_insights_user_idx on ai_insights(user_id);
+create index if not exists ai_insights_generated_idx on ai_insights(generated_at desc);
+
+-- ─── 8. NOTIFICATIONS ────────────────────────────────────────────────────────
+create table if not exists notifications (
+  id          uuid primary key default uuid_generate_v4(),
+  user_id     uuid not null references profiles(id) on delete cascade,
+  type        text not null,  -- 'break_reminder' | 'exercise_prompt' | 'ai_insight' | 'system'
+  title       text not null,
+  body        text,
+  is_read     boolean default false,
+  sent_at     timestamptz not null default now(),
+  read_at     timestamptz
+);
+
+create index if not exists notifications_user_idx on notifications(user_id);
+create index if not exists notifications_sent_idx on notifications(sent_at desc);
+
+-- ─── 9. FEEDBACK SUBMISSIONS ─────────────────────────────────────────────────
+create table if not exists feedback_submissions (
+  id                   uuid primary key default uuid_generate_v4(),
+  user_id              uuid references profiles(id) on delete set null,
+  testing_session_id   text,
+  app_version          text,
+  testing_method       text,
+  overall_rating       smallint check (overall_rating between 1 and 5),
+  first_impression     smallint check (first_impression between 1 and 5),
+  ease_of_navigation   smallint check (ease_of_navigation between 1 and 5),
+  ease_of_learning     smallint check (ease_of_learning between 1 and 5),
+  accomplished_task    text,
+  most_useful_feature  text,
+  needs_improvement    text,
+  confusing_part       text,
+  bug_report           text,
+  would_use_again      text,
+  would_recommend      text,
+  additional_comments  text,
+  feature_request      text,
+  device               text,
+  browser              text,
+  submitted_at         timestamptz not null default now()
+);
+
+create index if not exists feedback_user_idx on feedback_submissions(user_id);
+create index if not exists feedback_submitted_idx on feedback_submissions(submitted_at desc);
+
+-- ─── 10. LEARN MODULES ───────────────────────────────────────────────────────
+create table if not exists learn_modules (
+  id          uuid primary key default uuid_generate_v4(),
+  slug        text not null unique,
+  title       text not null,
+  description text,
+  category    text,
+  difficulty  text default 'Beginner',
+  duration_mins int default 5,
+  content     text,
+  sort_order  int default 0,
+  published   boolean default true,
+  created_at  timestamptz not null default now()
+);
+
+create table if not exists learn_progress (
+  id          uuid primary key default uuid_generate_v4(),
+  user_id     uuid not null references profiles(id) on delete cascade,
+  module_id   uuid not null references learn_modules(id) on delete cascade,
+  completed   boolean default false,
+  progress_pct int default 0,
+  started_at  timestamptz,
+  completed_at timestamptz,
+  unique (user_id, module_id)
+);
+
+create index if not exists learn_progress_user_idx on learn_progress(user_id);
+
+-- ─── 11. ADMIN AUDIT LOGS ────────────────────────────────────────────────────
+create table if not exists audit_logs (
+  id          uuid primary key default uuid_generate_v4(),
+  admin_id    uuid references profiles(id) on delete set null,
+  action      text not null,
+  target_type text,
+  target_id   text,
+  metadata    jsonb,
+  created_at  timestamptz not null default now()
+);
+
+create index if not exists audit_logs_admin_idx on audit_logs(admin_id);
+create index if not exists audit_logs_created_idx on audit_logs(created_at desc);
+
+-- ─── ROW LEVEL SECURITY ──────────────────────────────────────────────────────
+
+alter table profiles             enable row level security;
+alter table user_preferences     enable row level security;
+alter table driving_sessions     enable row level security;
+alter table exercise_history     enable row level security;
+alter table health_metrics       enable row level security;
+alter table sedentary_logs       enable row level security;
+alter table ai_insights          enable row level security;
+alter table notifications        enable row level security;
+alter table feedback_submissions enable row level security;
+alter table learn_modules        enable row level security;
+alter table learn_progress       enable row level security;
+alter table audit_logs           enable row level security;
+
+-- Profiles
+create policy "Users read own profile"
+  on profiles for select using (auth.uid() = id);
+create policy "Users update own profile"
+  on profiles for update using (auth.uid() = id);
+create policy "Users insert own profile"
+  on profiles for insert with check (auth.uid() = id);
+create policy "Admins read all profiles"
+  on profiles for select using (
+    exists (select 1 from profiles where id = auth.uid() and role = 'admin')
+  );
+
+-- User Preferences
+create policy "Users manage own preferences"
+  on user_preferences for all using (auth.uid() = user_id);
+
+-- Driving Sessions
+create policy "Users manage own sessions"
+  on driving_sessions for all using (auth.uid() = user_id);
+create policy "Admins read all sessions"
+  on driving_sessions for select using (
+    exists (select 1 from profiles where id = auth.uid() and role = 'admin')
+  );
+
+-- Exercise History
+create policy "Users manage own exercise history"
+  on exercise_history for all using (auth.uid() = user_id);
+create policy "Admins read all exercise history"
+  on exercise_history for select using (
+    exists (select 1 from profiles where id = auth.uid() and role = 'admin')
+  );
+
+-- Health Metrics
+create policy "Users manage own health metrics"
+  on health_metrics for all using (auth.uid() = user_id);
+
+-- Sedentary Logs
+create policy "Users manage own sedentary logs"
+  on sedentary_logs for all using (auth.uid() = user_id);
+
+-- AI Insights
+create policy "Users read own insights"
+  on ai_insights for select using (auth.uid() = user_id);
+create policy "Users update own insights (mark read)"
+  on ai_insights for update using (auth.uid() = user_id);
+
+-- Notifications
+create policy "Users manage own notifications"
+  on notifications for all using (auth.uid() = user_id);
+
+-- Feedback
+create policy "Users insert feedback"
+  on feedback_submissions for insert with check (auth.uid() = user_id or user_id is null);
+create policy "Users read own feedback"
+  on feedback_submissions for select using (auth.uid() = user_id);
+create policy "Admins read all feedback"
+  on feedback_submissions for select using (
+    exists (select 1 from profiles where id = auth.uid() and role = 'admin')
+  );
+
+-- Learn Modules — public read
+create policy "Anyone reads published modules"
+  on learn_modules for select using (published = true);
+
+-- Learn Progress
+create policy "Users manage own learn progress"
+  on learn_progress for all using (auth.uid() = user_id);
+
+-- Audit Logs — admin only
+create policy "Admins read audit logs"
+  on audit_logs for select using (
+    exists (select 1 from profiles where id = auth.uid() and role = 'admin')
+  );
+create policy "Admins insert audit logs"
+  on audit_logs for insert with check (
+    exists (select 1 from profiles where id = auth.uid() and role = 'admin')
+  );
+
+-- ─── AUTO-CREATE PROFILE ON SIGN UP ──────────────────────────────────────────
+create or replace function handle_new_user()
+returns trigger language plpgsql security definer as $$
+begin
+  insert into public.profiles (id, name, email, role)
+  values (
+    new.id,
+    coalesce(new.raw_user_meta_data->>'name', split_part(new.email, '@', 1)),
+    new.email,
+    coalesce(new.raw_user_meta_data->>'role', 'driver')
+  )
+  on conflict (id) do nothing;
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute function handle_new_user();
+
+-- ─── SEED: Learn Modules ─────────────────────────────────────────────────────
+insert into learn_modules (slug, title, description, category, difficulty, duration_mins, sort_order) values
+  ('driver-posture-101',     'Driver Posture 101',           'Learn the fundamentals of ergonomic driving posture to prevent pain.', 'Posture', 'Beginner', 5, 1),
+  ('back-pain-prevention',   'Back Pain Prevention',         'Evidence-based strategies to keep your back healthy on long drives.',  'Health',  'Beginner', 7, 2),
+  ('neck-shoulder-care',     'Neck & Shoulder Care',         'Simple exercises and habits to relieve neck and shoulder tension.',     'Exercise','Beginner', 6, 3),
+  ('fatigue-management',     'Fatigue Management',           'Recognize the signs of driving fatigue and learn how to stay alert.',   'Safety',  'Intermediate', 8, 4),
+  ('break-planning',         'Strategic Break Planning',     'How to plan effective breaks that maximise recovery and alertness.',    'Wellness','Beginner', 5, 5),
+  ('sedentary-risks',        'Risks of Prolonged Sitting',   'The science behind sedentary behaviour and how to mitigate it.',       'Health',  'Intermediate', 10, 6),
+  ('breathing-techniques',   'Breathing for Drivers',        'Breathing techniques to reduce stress and maintain focus while driving.','Wellness','Beginner', 4, 7),
+  ('eye-strain-relief',      'Eye Strain Relief',            'Protect your vision and reduce eye strain on long trips.',              'Health',  'Beginner', 5, 8)
+on conflict (slug) do nothing;
+
+-- ─── PART 7 ADDITIONAL TABLES ────────────────────────────────────────────────
+
+-- ─── 12. EXERCISE CATEGORIES ─────────────────────────────────────────────────
+create table if not exists exercise_categories (
+  id          uuid primary key default uuid_generate_v4(),
+  name        text not null unique,
+  description text,
+  icon        text,
+  color       text,
+  sort_order  int default 0
+);
+
+-- ─── 13. EXERCISE PROGRESS (per-user cumulative) ─────────────────────────────
+create table if not exists exercise_progress (
+  id                   uuid primary key default uuid_generate_v4(),
+  user_id              uuid not null references profiles(id) on delete cascade,
+  exercise_id          int not null,
+  exercise_name        text not null,
+  total_completions    int not null default 0,
+  total_duration_secs  int not null default 0,
+  last_completed_at    timestamptz,
+  streak_days          int default 0,
+  updated_at           timestamptz not null default now(),
+  unique (user_id, exercise_id)
+);
+
+create index if not exists exercise_progress_user_idx on exercise_progress(user_id);
+
+-- ─── 14. EXERCISE RECOMMENDATIONS ────────────────────────────────────────────
+create table if not exists exercise_recommendations (
+  id              uuid primary key default uuid_generate_v4(),
+  user_id         uuid not null references profiles(id) on delete cascade,
+  exercise_id     int not null,
+  exercise_name   text not null,
+  reason          text,
+  context         text,  -- 'before' | 'break' | 'after' | 'traffic' | 'parked'
+  priority        int default 5,
+  generated_at    timestamptz not null default now(),
+  expires_at      timestamptz,
+  accepted        boolean
+);
+
+create index if not exists exercise_rec_user_idx on exercise_recommendations(user_id);
+
+-- ─── 15. REMINDERS ───────────────────────────────────────────────────────────
+create table if not exists reminders (
+  id              uuid primary key default uuid_generate_v4(),
+  user_id         uuid not null references profiles(id) on delete cascade,
+  reminder_type   text not null check (reminder_type in ('break','exercise','hydration','posture','custom')),
+  message         text,
+  scheduled_at    timestamptz not null,
+  sent            boolean default false,
+  dismissed       boolean default false,
+  created_at      timestamptz not null default now()
+);
+
+create index if not exists reminders_user_idx on reminders(user_id);
+create index if not exists reminders_scheduled_idx on reminders(scheduled_at);
+
+-- ─── 16. ANALYTICS EVENTS ────────────────────────────────────────────────────
+create table if not exists analytics_events (
+  id          uuid primary key default uuid_generate_v4(),
+  user_id     uuid references profiles(id) on delete set null,
+  event_name  text not null,
+  properties  jsonb default '{}',
+  page        text,
+  session_id  uuid references driving_sessions(id) on delete set null,
+  occurred_at timestamptz not null default now()
+);
+
+create index if not exists analytics_events_user_idx on analytics_events(user_id);
+create index if not exists analytics_events_name_idx on analytics_events(event_name);
+create index if not exists analytics_events_occurred_idx on analytics_events(occurred_at desc);
+
+-- ─── 17. DEVELOPER SIMULATIONS ───────────────────────────────────────────────
+create table if not exists developer_simulations (
+  id              uuid primary key default uuid_generate_v4(),
+  simulated_by    uuid references profiles(id) on delete set null,
+  simulation_type text not null,  -- 'session' | 'exercise_batch' | 'feedback'
+  payload         jsonb default '{}',
+  notes           text,
+  created_at      timestamptz not null default now()
+);
+
+create index if not exists dev_sim_by_idx on developer_simulations(simulated_by);
+
+-- ─── 18. ADMIN SETTINGS ──────────────────────────────────────────────────────
+create table if not exists admin_settings (
+  id                      uuid primary key default uuid_generate_v4(),
+  setting_key             text not null unique,
+  setting_value           text,
+  value_type              text default 'string' check (value_type in ('string','number','boolean','json')),
+  description             text,
+  updated_by              uuid references profiles(id) on delete set null,
+  updated_at              timestamptz not null default now()
+);
+
+-- Seed default admin settings
+insert into admin_settings (setting_key, setting_value, value_type, description) values
+  ('participant_quota',         '30',     'number',  'Maximum participants for current study phase'),
+  ('study_phase',               'alpha',  'string',  'Current study phase: alpha | beta | pilot | full'),
+  ('sedentary_alert_threshold', '45',     'number',  'Minutes of continuous driving before sedentary alert'),
+  ('break_reminder_interval',   '60',     'number',  'Minutes between break reminders'),
+  ('data_retention_days',       '90',     'number',  'Days to retain participant data'),
+  ('export_anonymized',         'true',   'boolean', 'Anonymize user IDs in CSV exports')
+on conflict (setting_key) do nothing;
+
+-- ─── 19. SURVEY RESPONSES ────────────────────────────────────────────────────
+create table if not exists survey_responses (
+  id              uuid primary key default uuid_generate_v4(),
+  user_id         uuid references profiles(id) on delete set null,
+  survey_id       text not null,
+  question_id     text not null,
+  answer          text,
+  answer_numeric  numeric,
+  submitted_at    timestamptz not null default now()
+);
+
+create index if not exists survey_resp_user_idx on survey_responses(user_id);
+create index if not exists survey_resp_survey_idx on survey_responses(survey_id);
+
+-- ─── 20. RESEARCH METRICS ────────────────────────────────────────────────────
+create table if not exists research_metrics (
+  id              uuid primary key default uuid_generate_v4(),
+  metric_name     text not null,
+  metric_value    numeric,
+  dimension       text,      -- e.g. 'daily' | 'weekly' | 'cohort'
+  period_start    date,
+  period_end      date,
+  metadata        jsonb default '{}',
+  computed_at     timestamptz not null default now()
+);
+
+create index if not exists research_metrics_name_idx on research_metrics(metric_name);
+create index if not exists research_metrics_computed_idx on research_metrics(computed_at desc);
+
+-- ─── 21. SYSTEM LOGS ─────────────────────────────────────────────────────────
+create table if not exists system_logs (
+  id          uuid primary key default uuid_generate_v4(),
+  level       text not null check (level in ('info','warn','error','debug')),
+  source      text not null,  -- 'auth' | 'db' | 'api' | 'scheduler' | 'export'
+  message     text not null,
+  metadata    jsonb,
+  created_at  timestamptz not null default now()
+);
+
+create index if not exists system_logs_level_idx on system_logs(level);
+create index if not exists system_logs_created_idx on system_logs(created_at desc);
+
+-- ─── RLS FOR PART 7 TABLES ───────────────────────────────────────────────────
+
+alter table exercise_categories      enable row level security;
+alter table exercise_progress        enable row level security;
+alter table exercise_recommendations enable row level security;
+alter table reminders                enable row level security;
+alter table analytics_events         enable row level security;
+alter table developer_simulations    enable row level security;
+alter table admin_settings           enable row level security;
+alter table survey_responses         enable row level security;
+alter table research_metrics         enable row level security;
+alter table system_logs              enable row level security;
+
+-- Exercise Categories — public read
+create policy "Anyone reads exercise categories"
+  on exercise_categories for select using (true);
+
+-- Exercise Progress
+create policy "Users manage own exercise progress"
+  on exercise_progress for all using (auth.uid() = user_id);
+create policy "Admins read all exercise progress"
+  on exercise_progress for select using (
+    exists (select 1 from profiles where id = auth.uid() and role = 'admin')
+  );
+
+-- Exercise Recommendations
+create policy "Users manage own recommendations"
+  on exercise_recommendations for all using (auth.uid() = user_id);
+
+-- Reminders
+create policy "Users manage own reminders"
+  on reminders for all using (auth.uid() = user_id);
+
+-- Analytics Events
+create policy "Users insert own events"
+  on analytics_events for insert with check (auth.uid() = user_id or user_id is null);
+create policy "Users read own events"
+  on analytics_events for select using (auth.uid() = user_id);
+create policy "Admins read all events"
+  on analytics_events for select using (
+    exists (select 1 from profiles where id = auth.uid() and role = 'admin')
+  );
+
+-- Developer Simulations
+create policy "Admins manage dev simulations"
+  on developer_simulations for all using (
+    exists (select 1 from profiles where id = auth.uid() and role = 'admin')
+  );
+
+-- Admin Settings — admin only
+create policy "Admins manage admin settings"
+  on admin_settings for all using (
+    exists (select 1 from profiles where id = auth.uid() and role = 'admin')
+  );
+
+-- Survey Responses
+create policy "Users insert own survey responses"
+  on survey_responses for insert with check (auth.uid() = user_id or user_id is null);
+create policy "Users read own survey responses"
+  on survey_responses for select using (auth.uid() = user_id);
+create policy "Admins read all survey responses"
+  on survey_responses for select using (
+    exists (select 1 from profiles where id = auth.uid() and role = 'admin')
+  );
+
+-- Research Metrics — admin only
+create policy "Admins read research metrics"
+  on research_metrics for select using (
+    exists (select 1 from profiles where id = auth.uid() and role = 'admin')
+  );
+create policy "Admins insert research metrics"
+  on research_metrics for insert with check (
+    exists (select 1 from profiles where id = auth.uid() and role = 'admin')
+  );
+
+-- System Logs — admin only
+create policy "Admins read system logs"
+  on system_logs for select using (
+    exists (select 1 from profiles where id = auth.uid() and role = 'admin')
+  );
+
+-- ─── Update health_metrics to also track wellness_score and calories ─────────
+-- (Adds columns that db.ts uses — safe to run even if already applied)
+alter table health_metrics
+  add column if not exists wellness_score int check (wellness_score between 0 and 100),
+  add column if not exists calories_burned int;
+
+-- ─── MIGRATION PATCH — Production Integration ─────────────────────────────────
+
+-- 1. feedback_submissions: add bug_experience column
+alter table feedback_submissions
+  add column if not exists bug_experience text check (bug_experience in ('none','minor','moderate','major'));
+
+-- 2. user_preferences: add per-notification-type flags
+alter table user_preferences
+  add column if not exists exercise_reminders boolean default true,
+  add column if not exists break_alerts       boolean default true,
+  add column if not exists health_insights    boolean default true,
+  add column if not exists session_summaries  boolean default true;
+
+-- 3. driving_sessions: add warmup/cooldown counts
+alter table driving_sessions
+  add column if not exists warmup_exercises   int not null default 0,
+  add column if not exists cooldown_exercises int not null default 0,
+  add column if not exists health_score       int,
+  add column if not exists calories           int,
+  add column if not exists total_sets         int not null default 0;
+
+-- 4. admin_settings: seed testing-session-config keys
+insert into admin_settings (setting_key, setting_value, value_type, description) values
+  ('testing_session_id',      'UNLEASH-2026',          'string',  'Current testing session identifier'),
+  ('prototype_version',       'v0.49-TRL4',            'string',  'Prototype version string'),
+  ('user_group',              'Alpha Testers',          'string',  'Current user group under test'),
+  ('testing_environment',     'Controlled Lab',         'string',  'Testing environment description'),
+  ('study_start_date',        '',                       'string',  'Study start date ISO string'),
+  ('target_participants',     '30',                     'number',  'Number of target study participants'),
+  ('testing_objective',       'Validate MOOVE TRL-4 prototype for driver preventive health engagement.', 'string', 'Primary testing objective'),
+  ('overall_success_criteria','≥70% usability satisfaction, ≥3/5 average rating across all metrics.', 'string', 'Overall success criteria')
+on conflict (setting_key) do nothing;
+
+-- 5. Index for fast admin_settings key lookup
+create index if not exists admin_settings_key_idx on admin_settings(setting_key);
+
+-- 6. Materialized view for weekly exercise stats per user (admin analytics)
+-- Refreshed by calling: REFRESH MATERIALIZED VIEW CONCURRENTLY mv_weekly_exercise_stats;
+create materialized view if not exists mv_weekly_exercise_stats as
+select
+  user_id,
+  date_trunc('week', completed_at) as week_start,
+  count(*) filter (where status = 'completed') as completed,
+  count(*) filter (where status = 'skipped')   as skipped,
+  count(distinct completed_at::date)            as active_days
+from exercise_history
+group by user_id, date_trunc('week', completed_at);
+
+create unique index if not exists mv_weekly_ex_stats_idx
+  on mv_weekly_exercise_stats(user_id, week_start);
+
+-- 7. DB function: get testing config as a single JSON object (admin use)
+create or replace function get_testing_config()
+returns jsonb language sql security definer as $$
+  select jsonb_object_agg(setting_key, setting_value)
+  from admin_settings
+  where setting_key in (
+    'testing_session_id','prototype_version','user_group',
+    'testing_environment','study_start_date','target_participants',
+    'testing_objective','overall_success_criteria',
+    'participant_quota','study_phase'
+  );
+$$;
+
+-- 8. DB function: upsert a single admin setting
+create or replace function upsert_admin_setting(p_key text, p_value text, p_admin uuid)
+returns void language plpgsql security definer as $$
+begin
+  insert into admin_settings (setting_key, setting_value, updated_by, updated_at)
+  values (p_key, p_value, p_admin, now())
+  on conflict (setting_key) do update
+    set setting_value = excluded.setting_value,
+        updated_by    = excluded.updated_by,
+        updated_at    = now();
+end;
+$$;
+
+
+
+
+
+]
+________________________________________
+Current Problems
+Currently the application cannot properly communicate with Supabase.
+Some data cannot be loaded.
+Some data cannot be inserted.
+Some pages continuously fail because of database errors.
+I am seeing multiple PostgREST API failures.
+________________________________________
+Errors
+The following errors are occurring repeatedly.
+Problem 1
+profiles
+GET /rest/v1/profiles
+returns
+500 Internal Server Error
+________________________________________
+Problem 2
+admin_settings
+GET /rest/v1/admin_settings
+returns
+500 Internal Server Error
+________________________________________
+Problem 3
+user_preferences
+GET /rest/v1/user_preferences
+returns
+406 Not Acceptable
+________________________________________
+PostgreSQL Error
+The Postgres logs repeatedly show:
+42P17
+infinite recursion detected in policy for relation "profiles"
+This occurs multiple times every time the frontend loads.
+________________________________________
+Root Cause Analysis
+From the logs, the most likely cause is that the Row Level Security policy on the profiles table references the profiles table itself.
+For example, policies similar to:
+exists (
+    select 1
+    from profiles
+    where id = auth.uid()
+      and role='admin'
+)
+can recursively invoke the same RLS policy, causing PostgreSQL to detect an infinite recursion loop.
+This recursion causes:
+•	profiles endpoint → 500
+•	admin_settings endpoint → 500
+•	every table depending on profiles policies to fail
+•	cascading authentication failures
+The frontend therefore cannot retrieve:
+•	profiles
+•	admin_settings
+•	user preferences
+•	user dashboard
+•	authenticated session data
+________________________________________
+Required Tasks
+Perform a complete audit of the database.
+________________________________________
+1. Audit Every RLS Policy
+Inspect every policy for every table.
+Especially:
+•	profiles
+•	user_preferences
+•	admin_settings
+•	driving_sessions
+•	exercise_history
+•	health_metrics
+•	reminders
+•	notifications
+•	analytics_events
+Look for:
+•	recursive policies
+•	circular policy dependencies
+•	self joins
+•	EXISTS clauses referencing protected tables
+•	invalid USING clauses
+•	invalid WITH CHECK clauses
+•	policies blocking inserts
+•	policies blocking updates
+•	policies blocking selects
+Rewrite every problematic policy.
+________________________________________
+2. Fix Profiles RLS
+Replace recursive policies with production-safe alternatives.
+Never reference the profiles table inside its own policy.
+Use safer approaches such as:
+•	auth.uid()
+•	JWT claims
+•	helper functions with SECURITY DEFINER
+•	immutable role lookup functions
+•	service role where appropriate
+Avoid every possible recursive query.
+________________________________________
+3. Fix Admin Settings
+The admin_settings table currently fails because its policy depends on profiles.
+Redesign the authorization flow so that:
+•	no recursive profile lookup occurs
+•	admins can still read/write settings
+•	regular users cannot access admin data
+________________________________________
+4. Fix User Preferences
+Investigate why:
+GET user_preferences
+
+returns 406
+Check:
+•	RLS
+•	nullable data
+•	frontend query
+•	.single()
+•	maybeSingle()
+•	missing row handling
+If no preferences exist:
+the application should automatically create default preferences.
+No page should crash because a preferences row does not yet exist.
+________________________________________
+5. Verify Auth Trigger
+Inspect:
+handle_new_user()
+Verify:
+•	profile creation
+•	default role
+•	name
+•	email
+•	trigger execution
+•	permissions
+Ensure that after signup:
+profiles
+always contains one record.
+________________________________________
+6. Verify Foreign Keys
+Inspect every foreign key.
+Verify:
+•	references
+•	cascade rules
+•	insert order
+Ensure:
+auth.users
+↓
+profiles
+↓
+user_preferences
+↓
+driving_sessions
+↓
+exercise_history
+works correctly.
+________________________________________
+7. Verify Database Initialization
+Check whether new users automatically receive:
+Profile
+User Preferences
+Default Settings
+Default Learn Progress
+Default Exercise Progress
+Any required initialization records.
+If missing,
+create SQL functions/triggers to initialize them automatically.
+________________________________________
+8. Improve Error Handling
+Frontend should never crash because:
+•	profile missing
+•	preference missing
+•	empty query
+•	null response
+Implement graceful handling.
+Use:
+•	maybeSingle()
+•	default values
+•	fallback UI
+•	loading states
+•	retry logic
+________________________________________
+9. Refactor Supabase Queries
+Audit every Supabase query.
+Ensure:
+•	no unnecessary requests
+•	no duplicate requests
+•	no infinite React re-renders
+•	proper caching
+•	proper async handling
+•	proper error handling
+________________________________________
+10. Weekly Driving Activity
+Under the Driving Session tab,
+the current chart uses placeholder or static values.
+Replace it with real-time data from Supabase.
+________________________________________
+Data Source
+The chart must retrieve data from:
+driving_sessions
+Only completed driving sessions should be counted.
+Specifically,
+only sessions where
+ended_at IS NOT NULL
+should contribute.
+________________________________________
+Weekly Aggregation
+Aggregate the total driving duration for the current week.
+Group by:
+Monday
+Tuesday
+Wednesday
+Thursday
+Friday
+Saturday
+Sunday
+Use:
+duration_seconds
+Convert to:
+hours
+Example:
+7200 seconds
+
+↓
+
+2.0h
+________________________________________
+Required Cards
+Populate dynamically:
+Weekly Driving Activity
+Daily bars
+Mon
+Tue
+Wed
+Thu
+Fri
+Sat
+Sun
+________________________________________
+Days Active
+Count unique days having at least one completed session.
+________________________________________
+Total Driving
+Sum:
+duration_seconds
+Convert to hours.
+________________________________________
+Exercises Done
+Sum:
+exercises_completed
+________________________________________
+Everything must come directly from Supabase.
+No hardcoded values.
+No mock data.
+No sample JSON.
+________________________________________
+11. Optimize Queries
+Use efficient SQL.
+Prefer:
+•	aggregation
+•	indexes
+•	filtering in SQL
+•	minimal client processing
+Avoid downloading unnecessary records.
+________________________________________
+12. Verify TypeScript Types
+Ensure every table matches generated Supabase types.
+No:
+any
+No unsafe casts.
+No nullable errors.
+________________________________________
+13. Preserve Existing Features
+Do not break:
+•	Authentication
+•	Dashboard
+•	AI Insights
+•	Exercise Library
+•	Health Dashboard
+•	Learn Module
+•	Notifications
+•	Sedentary Monitor
+•	Feedback Module
+•	Admin Dashboard
+________________________________________
+Deliverables
+Provide:
+1.	A complete root cause analysis.
+2.	Every identified issue.
+3.	The reasoning behind each fix.
+4.	Updated SQL migration(s).
+5.	Updated RLS policies.
+6.	Updated PostgreSQL functions.
+7.	Updated Supabase queries.
+8.	Updated React/TypeScript code.
+9.	Any frontend changes required.
+10.	Any backend changes required.
+11.	Performance improvements.
+12.	Security improvements.
+13.	A verification checklist confirming that:
+•	New users can sign up successfully.
+•	Profiles are created automatically.
+•	User preferences are initialized automatically.
+•	RLS policies no longer cause recursion.
+•	profiles, user_preferences, and admin_settings endpoints return HTTP 200.
+•	Driving sessions are successfully saved.
+•	Exercise history is saved correctly.
+•	Weekly Driving Activity displays real user data from Supabase.
+•	Dashboard statistics update immediately after a driving session ends.
+•	No PostgREST 406, 500, or PostgreSQL 42P17 errors remain.
+•	The application is production-ready, secure, scalable, and follows Supabase and PostgreSQL best practices.
+

@@ -1,0 +1,9 @@
+-- Deprecated: do not run this legacy hotfix independently.
+--
+-- It was replaced because it granted broad table permissions, allowed repeated
+-- unauthenticated RPC attempts, and relied on an inconsistent admin-role setup.
+-- Apply the canonical, idempotent repair instead:
+--   supabase/migrations/20260805_security_and_data_integrity.sql
+--
+-- After applying it, promote reviewed admins only from the Supabase SQL editor:
+--   update public.profiles set role = 'admin' where email = 'admin@example.com';
