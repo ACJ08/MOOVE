@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import type { FeedbackEntry } from '@/pages/driver/FeedbackValidation'
+import { fetchAllSessionsAdmin, fetchFeedbackSubmissions } from '@/lib/db'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -93,9 +94,22 @@ export default function AdminDashboard() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    setFeedback(loadFeedback())
-    setSessions(loadSessions())
-    setLoading(false)
+    const load = async () => {
+      try {
+        const [dbSessions, dbFeedback] = await Promise.all([fetchAllSessionsAdmin(), fetchFeedbackSubmissions()])
+        setSessions(dbSessions.map(s => ({ durationSeconds: s.durationSeconds, exercisesCompleted: s.exercisesCompleted, avgRisk: s.avgRisk, submittedAt: s.startedAt })))
+        setFeedback(dbFeedback.map(f => ({
+          overallRating: f.overallRating ?? 0, firstImpression: f.firstImpression ?? 0,
+          easeOfNavigation: f.easeOfNavigation ?? 0, easeOfLearning: f.easeOfLearning ?? 0,
+          accomplishedTask: f.accomplishedTask ?? '', mostUsefulFeature: f.mostUsefulFeature ?? '',
+          needsImprovement: f.needsImprovement ?? '', wouldRecommend: f.wouldRecommend ?? '',
+          driverId: f.userId ?? '', date: f.submittedAt,
+        }) as FeedbackEntry))
+      } finally { setLoading(false) }
+    }
+    void load()
+    window.addEventListener('moove:session-saved', load)
+    return () => window.removeEventListener('moove:session-saved', load)
   }, [])
 
   const n = feedback.length

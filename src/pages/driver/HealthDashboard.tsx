@@ -2,6 +2,7 @@ import { useMemo, useState, useEffect } from 'react'
 import { useAuth } from '@/context/AuthContext'
 import { exercises } from '@/data/exercises'
 import mascotImg from '@/imports/_MASCOT_REMOVE_BG__MOOVE_CHARACTER.png'
+import { fetchCompletedSessions } from '@/lib/db'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface SavedSession {
@@ -92,14 +93,16 @@ export default function HealthDashboard() {
   const isDemo = user?.id === 'demo'
   const userKey = user?.email ?? user?.id ?? ''
 
-  const [sessionVersion, setSessionVersion] = useState(0)
+  const [all, setAll] = useState<SavedSession[]>([])
   useEffect(() => {
-    const handler = () => setSessionVersion(v => v + 1)
-    window.addEventListener('moove:session-saved', handler)
-    return () => window.removeEventListener('moove:session-saved', handler)
-  }, [])
-
-  const all = useMemo(() => loadSessions(), [sessionVersion])
+    if (!user?.id || isDemo) return
+    const load = async () => {
+      try { setAll(await fetchCompletedSessions(user.id) as SavedSession[]) }
+      catch (error) { console.warn('[MOOVE] Could not load health sessions:', error) }
+    }
+    void load(); window.addEventListener('moove:session-saved', load)
+    return () => window.removeEventListener('moove:session-saved', load)
+  }, [user?.id, isDemo])
   const prefs = useMemo(() => loadPrefs(userKey), [userKey])
 
   const m = useMemo(() => {

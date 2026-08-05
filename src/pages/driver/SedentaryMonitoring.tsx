@@ -1,6 +1,7 @@
-import { useMemo } from 'react'
+import { useMemo, useEffect, useState } from 'react'
 import { useAuth } from '@/context/AuthContext'
 import mascotImg from '@/imports/_MASCOT_REMOVE_BG__MOOVE_CHARACTER.png'
+import { fetchCompletedSessions } from '@/lib/db'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface SavedSession {
@@ -71,7 +72,16 @@ function Bars({ data, maxVal, colorFn, goalMins = 0 }: {
 export default function SedentaryMonitoring() {
   const { user } = useAuth()
   const isDemo = user?.id === 'demo'
-  const all = useMemo(() => loadSessions(), [])
+  const [all, setAll] = useState<SavedSession[]>([])
+  useEffect(() => {
+    if (!user?.id || isDemo) return
+    const load = async () => {
+      try { setAll(await fetchCompletedSessions(user.id) as SavedSession[]) }
+      catch (error) { console.warn('[MOOVE] Could not load sedentary sessions:', error) }
+    }
+    void load(); window.addEventListener('moove:session-saved', load)
+    return () => window.removeEventListener('moove:session-saved', load)
+  }, [user?.id, isDemo])
 
   const m = useMemo(() => {
     if (isDemo || all.length === 0) return null

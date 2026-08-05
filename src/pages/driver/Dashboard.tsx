@@ -85,6 +85,12 @@ export default function Dashboard() {
   const maxDriving = Math.max(...(d?.weeklyActivity ?? []).map(x => x.driving), 1)
 
   const wellnessScore = isDemo ? 87 : (stats?.wellnessScore ?? 0)
+  const computedBadges = [
+    { icon: '🔥', label: 'Streak Master', desc: `${stats?.movementStreak ?? 0}/7 days`, earned: (stats?.movementStreak ?? 0) >= 7 },
+    { icon: '🏆', label: 'Session Pro', desc: `${stats?.totalSessions ?? 0}/10 sessions`, earned: (stats?.totalSessions ?? 0) >= 10 },
+    { icon: '🤸', label: 'Exercise Champ', desc: `${stats?.totalExercises ?? 0}/50 exercises`, earned: (stats?.totalExercises ?? 0) >= 50 },
+    { icon: '💪', label: 'Consistency King', desc: `${stats?.movementStreak ?? 0}/30 days`, earned: (stats?.movementStreak ?? 0) >= 30 },
+  ]
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
@@ -116,7 +122,7 @@ export default function Dashboard() {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <StatCard icon="🔥" value={`${d?.calories ?? 0} kcal`} label="Calories Burned" color="#EF4444" sub="Estimated today" />
         <StatCard icon="💚" value={`${wellnessScore}/100`} label="Wellness Score" color="#22C55E" sub={wellnessScore >= 70 ? 'Above average' : wellnessScore > 0 ? 'Keep improving' : 'No data yet'} />
-        <StatCard icon="📅" value={isDemo ? '7 days' : `${stats?.movementStreak ?? 0} days`} label="Best Streak" color="#A855F7" sub="Consecutive days active" />
+        <StatCard icon="📅" value={isDemo ? '7 days' : `${stats?.bestStreak ?? 0} days`} label="Best Streak" color="#A855F7" sub="Consecutive days active" />
         <StatCard icon="📅" value={d?.weeklyH ?? '—'} label="Weekly Driving" color="#0EA5E9" sub="This week" />
       </div>
 
@@ -255,7 +261,7 @@ export default function Dashboard() {
             {hasData && (
               <div className="mt-3 pt-3 border-t border-moove-border flex items-center justify-between">
                 <span className="text-xs text-moove-muted">
-                  {isDemo ? '12 sessions' : `${stats?.recentSessions.length ?? 0} sessions`} recorded
+                  {isDemo ? '12 sessions' : `${stats?.totalSessions ?? 0} sessions`} recorded
                 </span>
                 <Link to="/driver/sessions" className="text-xs font-bold text-moove-orange hover:underline">History →</Link>
               </div>
@@ -266,7 +272,7 @@ export default function Dashboard() {
           <div className="bg-white rounded-2xl p-5 card-shadow">
             <div className="text-xs font-bold text-moove-yellow mb-3 tracking-wide">ACHIEVEMENT BADGES</div>
             <div className="grid grid-cols-2 gap-2">
-              {badges.map(b => (
+              {(isDemo ? badges : computedBadges).map(b => (
                 <div
                   key={b.label}
                   className={`flex flex-col items-center text-center p-3 rounded-xl border ${b.earned ? 'bg-yellow-50 border-yellow-200' : 'bg-gray-50 border-gray-100 opacity-50'}`}

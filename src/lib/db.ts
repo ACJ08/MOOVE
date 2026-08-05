@@ -51,6 +51,9 @@ export interface DashboardStats {
   stressTrend: number[]  // last 7 days, 1-5
   weeklyActivity: { day: string; driving: number }[]
   recentSessions: SessionRecord[]
+  totalSessions?: number
+  bestStreak?: number
+  totalExercises?: number
 }
 
 export interface OnboardingAnswers { driver_type: string; daily_hours: string; drive_times: string[]; tired_areas: string[]; reminder_freq: string; reminder_style: string; warmup_pref: string; notifications: string }
@@ -77,6 +80,28 @@ export async function recordSessionEvent(userId: string, sessionId: string | nul
 
 function loadLocalSessions(): SessionRecord[] {
   try { return JSON.parse(localStorage.getItem('moove_session_history') || '[]') } catch { return [] }
+}
+
+function localDateKey(value: string | Date): string {
+  return new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(value))
+}
+
+function completedSessionFromRow(row: any): SessionRecord {
+  const startedAt = new Date(row.started_at)
+  const drivingSeconds = row.driving_seconds ?? row.duration_seconds ?? 0
+  return {
+    id: row.id, dateISO: localDateKey(startedAt),
+    date: startedAt.toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: 'numeric' }),
+    startTime: startedAt.toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' }),
+    endTime: row.ended_at ? new Date(row.ended_at).toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' }) : '—',
+    duration: formatDuration(row.duration_seconds ?? 0), durationSeconds: row.duration_seconds ?? 0,
+    drivingSeconds, sedentarySeconds: row.sedentary_seconds ?? drivingSeconds,
+    exercisesCompleted: row.exercises_completed ?? 0, exercisesSkipped: row.exercises_skipped ?? 0,
+    warmupExercises: row.warmup_exercises ?? 0, breakExercises: row.breaks_taken ?? 0,
+    cooldownExercises: row.cooldown_exercises ?? 0, calories: Number(row.calories ?? 0),
+    avgRisk: row.avg_sedentary_risk ?? 'Low', notes: row.note ?? '', healthScore: row.health_score ?? 0,
+    totalSets: row.total_sets ?? 0,
+  }
 }
 
 // ─── Create a partial session at start ───────────────────────────────────────
@@ -247,6 +272,10 @@ export async function saveSessionToSupabase(
 // ─── Fetch dashboard stats ────────────────────────────────────────────────────
 
 export async function fetchDashboardStats(userId: string): Promise<DashboardStats> {
+  return buildDashboardStats(await fetchCompletedSessions(userId))
+
+  /* Legacy localStorage aggregation retained below temporarily for migration reference.
+     It is intentionally unreachable: Supabase is the only source of driver data. */
   const localSessions = loadLocalSessions()
 
   // Calculate today's stats from localStorage sessions
@@ -364,9 +393,53 @@ export async function fetchDashboardStats(userId: string): Promise<DashboardStat
   }
 }
 
+function buildDashboardStats(sessions: SessionRecord[]): DashboardStats {
+  const today = localDateKey(new Date())
+  const dayKeys = Array.from({ length: 7 }, (_, i) => {
+    const date = new Date(); date.setDate(date.getDate() - (6 - i)); return localDateKey(date)
+  })
+  const todaySessions = sessions.filter(s => s.dateISO === today)
+  const activeDays = new Set(sessions.map(s => s.dateISO))
+  const streakFrom = (start: Date) => {
+    let count = 0; const cursor = new Date(start)
+    while (activeDays.has(localDateKey(cursor))) { count++; cursor.setDate(cursor.getDate() - 1) }
+    return count
+  }
+  const movementStreak = streakFrom(new Date())
+  const bestStreak = Array.from(activeDays).reduce((best, key) => Math.max(best, streakFrom(new Date(`${key}T12:00:00`))), 0)
+  const weeklyActivity = dayKeys.map(key => {
+    const seconds = sessions.filter(s => s.dateISO === key).reduce((sum, s) => sum + s.drivingSeconds, 0)
+    return { day: new Date(`${key}T12:00:00`).toLocaleDateString('en-PH', { weekday: 'short' }), driving: Math.round(seconds / 360) / 10 }
+  })
+  const wellnessRows = todaySessions.filter(s => s.healthScore > 0)
+  return {
+    todayDrivingSeconds: todaySessions.reduce((sum, s) => sum + s.drivingSeconds, 0),
+    weeklyDrivingSeconds: sessions.filter(s => dayKeys.includes(s.dateISO)).reduce((sum, s) => sum + s.drivingSeconds, 0),
+    movementStreak, bestStreak, totalSessions: sessions.length,
+    exercisesCompleted: todaySessions.reduce((sum, s) => sum + s.exercisesCompleted, 0),
+    totalExercises: sessions.reduce((sum, s) => sum + s.exercisesCompleted, 0),
+    caloriesBurned: todaySessions.reduce((sum, s) => sum + s.calories, 0),
+    wellnessScore: wellnessRows.length ? Math.round(wellnessRows.reduce((sum, s) => sum + s.healthScore, 0) / wellnessRows.length) : 0,
+    stressTrend: dayKeys.map(key => { const rows = sessions.filter(s => s.dateISO === key && s.healthScore > 0); return rows.length ? Math.max(1, Math.min(5, Math.round((100 - rows.reduce((sum, s) => sum + s.healthScore, 0) / rows.length) / 20))) : 0 }),
+    weeklyActivity, recentSessions: sessions.slice(0, 5),
+  }
+}
+
+/** Single source of truth for all real driver session history and analytics. */
+export async function fetchCompletedSessions(userId: string, limit = 1000): Promise<SessionRecord[]> {
+  if (!supabase || userId === 'demo' || userId === 'admin-demo') return []
+  const { data, error } = await supabase.from('driving_sessions').select('*').eq('user_id', userId)
+    .eq('status', 'completed').not('ended_at', 'is', null).order('started_at', { ascending: false }).limit(limit)
+  if (error) throw new Error(error.message)
+  return (data ?? []).map(completedSessionFromRow)
+}
+
 // ─── Fetch recent sessions from Supabase ─────────────────────────────────────
 
 export async function fetchRecentSessionsFromDB(userId: string, limit = 10): Promise<SessionRecord[]> {
+  return fetchCompletedSessions(userId, limit)
+
+  // Legacy compatibility path. Driver pages must never read browser session history.
   if (!supabase || userId === 'demo' || userId === 'admin-demo') return loadLocalSessions().slice(0, limit)
 
   try {
@@ -464,8 +537,6 @@ export interface TestingConfig {
   overallSuccessCriteria: string
 }
 
-const TESTING_CONFIG_LOCAL_KEY = 'moove_testing_config'
-
 function defaultTestingConfig(): TestingConfig {
   return {
     sessionId: 'UNLEASH-2026',
@@ -504,25 +575,17 @@ export async function fetchTestingConfig(): Promise<TestingConfig> {
           testingObjective: m['testing_objective'] ?? '',
           overallSuccessCriteria: m['overall_success_criteria'] ?? '',
         }
-        localStorage.setItem(TESTING_CONFIG_LOCAL_KEY, JSON.stringify(cfg))
         return cfg
       }
-    } catch { /* fall through to localStorage */ }
+    } catch { return defaultTestingConfig() }
   }
-  // Fall back to localStorage cache (written when admin saves config)
-  try {
-    const cached = JSON.parse(localStorage.getItem(TESTING_CONFIG_LOCAL_KEY) || 'null')
-    if (cached && cached.sessionId) return { ...defaultTestingConfig(), ...cached }
-  } catch { /* ignore */ }
   return defaultTestingConfig()
 }
 
 export async function saveTestingConfig(cfg: TestingConfig): Promise<void> {
-  localStorage.setItem(TESTING_CONFIG_LOCAL_KEY, JSON.stringify(cfg))
-  if (!supabase) return
+  if (!supabase) throw new Error('Supabase is not configured.')
   const { data: { user } } = await supabase.auth.getUser()
-  // Demo mode has no Supabase session; keeping its settings local avoids unauthenticated RPC calls.
-  if (!user) return
+  if (!user) throw new Error('Sign in as an administrator to save settings.')
   const pairs: [string, string][] = [
     ['testing_session_id', cfg.sessionId],
     ['prototype_version', cfg.prototypeVersion],
@@ -534,11 +597,23 @@ export async function saveTestingConfig(cfg: TestingConfig): Promise<void> {
     ['overall_success_criteria', cfg.overallSuccessCriteria],
   ]
   // Fire-and-forget via SECURITY DEFINER RPC — no table GRANT needed.
-  for (const [key, val] of pairs) {
-    supabase.rpc('upsert_admin_setting', { p_key: key, p_val: val }).then(({ error }) => {
-      if (error) console.warn('[MOOVE] admin_settings sync failed:', key, error.message)
-    })
-  }
+  const results = await Promise.all(pairs.map(([p_key, p_val]) => supabase.rpc('upsert_admin_setting', { p_key, p_val })))
+  const failure = results.find(result => result.error)
+  if (failure?.error) throw new Error(failure.error.message)
+}
+
+export async function fetchAdminSettings(keys: string[]): Promise<Record<string, string>> {
+  if (!supabase) throw new Error('Supabase is not configured.')
+  const { data, error } = await supabase.from('admin_settings').select('setting_key,setting_value').in('setting_key', keys)
+  if (error) throw new Error(error.message)
+  return Object.fromEntries((data ?? []).map(row => [row.setting_key, row.setting_value]))
+}
+
+export async function saveAdminSettings(values: Record<string, string>): Promise<void> {
+  if (!supabase) throw new Error('Supabase is not configured.')
+  const results = await Promise.all(Object.entries(values).map(([p_key, p_val]) => supabase.rpc('upsert_admin_setting', { p_key, p_val })))
+  const failure = results.find(result => result.error)
+  if (failure?.error) throw new Error(failure.error.message)
 }
 
 // ─── Admin queries ────────────────────────────────────────────────────────────
@@ -554,17 +629,17 @@ export interface AdminSessionRow {
   avgRisk: string
 }
 
-export async function fetchAllSessionsAdmin(days = 30): Promise<AdminSessionRow[]> {
+export async function fetchAllSessionsAdmin(days?: number): Promise<AdminSessionRow[]> {
   if (!supabase) return []
   try {
-    const since = new Date(); since.setDate(since.getDate() - days)
-    const { data, error } = await supabase
+    let query = supabase
       .from('driving_sessions')
       .select('id,user_id,started_at,duration_seconds,exercises_completed,exercises_skipped,breaks_taken,avg_sedentary_risk')
       .not('ended_at', 'is', null)
-      .gte('started_at', since.toISOString())
       .order('started_at', { ascending: false })
       .limit(500)
+    if (days) { const since = new Date(); since.setDate(since.getDate() - days); query = query.gte('started_at', since.toISOString()) }
+    const { data, error } = await query
 
     if (error || !data) return []
     return data.map(r => ({

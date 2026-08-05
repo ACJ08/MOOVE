@@ -1,8 +1,10 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
+import { useAuth } from '@/context/AuthContext'
 import { exercises, type Exercise } from '@/data/exercises'
 import mascotImg from '@/imports/_MASCOT_REMOVE_BG__MOOVE_CHARACTER.png'
 import ExerciseVideo from '@/components/ExerciseVideo'
 import { getExerciseVideo } from '@/data/exerciseVideos'
+import { fetchExerciseHistory, type ExerciseHistoryRow } from '@/services/analyticsService'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -12,42 +14,31 @@ const ctxColors = { safe: '#22C55E', caution: '#FBBF24', unsafe: '#EF4444' }
 const ctxIcons = { safe: '✅', caution: '⚠️', unsafe: '❌' }
 const difficultyColors = { Easy: '#22C55E', Moderate: '#F97316' }
 
-interface SavedSession {
-  dateISO?: string; date?: string
-  warmupExercises?: number; breakExercises?: number; cooldownExercises?: number
-  exercisesCompleted?: number; totalSets?: number; durationSeconds?: number
-  exerciseHistory?: CompletedExercise[]
-}
-
-interface CompletedExercise {
-  exerciseId: number; name: string; bodyArea: string
-  durationSeconds: number; completedAt: string; status: string
-  sets?: number; durationPerSet?: number; restBetween?: number
-}
-
-function loadSessions(): SavedSession[] {
-  try { return JSON.parse(localStorage.getItem('moove_session_history') || '[]') } catch { return [] }
-}
-
 function getTodayISO() { return new Date().toISOString().slice(0, 10) }
 
 // ─── Today's Summary Widget ───────────────────────────────────────────────────
 
 function TodaySummary() {
-  const sessions = useMemo(loadSessions, [])
+  const { user } = useAuth()
+  const [records, setRecords] = useState<ExerciseHistoryRow[]>([])
+  const [loading, setLoading] = useState(true)
   const todayISO = getTodayISO()
-  const todaySessions = useMemo(() => sessions.filter(s => (s.dateISO ?? '').startsWith(todayISO)), [sessions, todayISO])
-
-  const warmup = todaySessions.reduce((s, r) => s + (r.warmupExercises ?? 0), 0)
-  const brk = todaySessions.reduce((s, r) => s + (r.breakExercises ?? 0), 0)
-  const cooldown = todaySessions.reduce((s, r) => s + (r.cooldownExercises ?? 0), 0)
-  const total = todaySessions.reduce((s, r) => s + (r.exercisesCompleted ?? 0), 0)
-  const sessionCount = todaySessions.length
-  const exTimeSecs = todaySessions.reduce((sum, s) => {
-    if (!s.exerciseHistory) return sum
-    return sum + s.exerciseHistory.filter(e => e.status === 'completed').reduce((es, e) => es + e.durationSeconds, 0)
-  }, 0)
+  useEffect(() => {
+    let active = true
+    const load = async () => { try { const rows = await fetchExerciseHistory(user?.id ?? ''); if (active) setRecords(rows) } finally { if (active) setLoading(false) } }
+    void load(); window.addEventListener('moove:session-saved', load)
+    return () => { active = false; window.removeEventListener('moove:session-saved', load) }
+  }, [user?.id])
+  const todayRecords = records.filter(record => record.completedAt.slice(0, 10) === todayISO)
+  const warmup = todayRecords.filter(record => record.context === 'before').length
+  const brk = todayRecords.filter(record => record.context === 'break').length
+  const cooldown = todayRecords.filter(record => record.context === 'after').length
+  const total = todayRecords.length
+  const sessionCount = new Set(todayRecords.map(record => record.sessionId).filter(Boolean)).size
+  const exTimeSecs = todayRecords.reduce((sum, record) => sum + record.durationSeconds, 0)
   const exTimeMins = Math.round(exTimeSecs / 60)
+
+  if (loading) return <div className="bg-white rounded-2xl p-5 card-shadow mb-5 text-sm text-moove-muted">Loading today’s exercise summary…</div>
 
   if (sessionCount === 0) {
     return (
@@ -214,39 +205,38 @@ function ExerciseDetailModal({ ex, onClose }: { ex: Exercise; onClose: () => voi
 // ─── Exercise History Tab ─────────────────────────────────────────────────────
 
 function ExerciseHistory() {
-  const allSessions = useMemo(loadSessions, [])
+  const { user } = useAuth()
+  const [historyRows, setHistoryRows] = useState<ExerciseHistoryRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const todayISO = getTodayISO()
   const [search, setSearch] = useState('')
   const [dateFilter, setDateFilter] = useState<'all' | 'today' | 'week' | 'month'>('all')
   const [catFilter, setCatFilter] = useState<'all' | 'warmup' | 'break' | 'cooldown'>('all')
 
-  const historyRows = useMemo(() => {
-    const rows: { sessionDate: string; sessionIdx: number; ex: CompletedExercise; category: string }[] = []
-    allSessions.forEach((s, idx) => {
-      if (!s.exerciseHistory) return
-      const dateISO = s.dateISO ?? ''
-      s.exerciseHistory.filter(e => e.status === 'completed').forEach(e => {
-        rows.push({ sessionDate: dateISO, sessionIdx: idx, ex: e, category: 'break' })
-      })
-    })
-    return rows
-  }, [allSessions])
+  useEffect(() => {
+    let active = true
+    const load = async () => { try { setLoading(true); setError(null); const rows = await fetchExerciseHistory(user?.id ?? ''); if (active) setHistoryRows(rows) } catch (e) { if (active) setError(e instanceof Error ? e.message : 'Unable to load exercise history.') } finally { if (active) setLoading(false) } }
+    void load(); window.addEventListener('moove:session-saved', load)
+    return () => { active = false; window.removeEventListener('moove:session-saved', load) }
+  }, [user?.id])
 
   const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 6)
   const monthAgo = new Date(); monthAgo.setDate(monthAgo.getDate() - 29)
 
   const filtered = useMemo(() => {
     return historyRows.filter(r => {
-      if (dateFilter === 'today' && r.sessionDate !== todayISO) return false
-      if (dateFilter === 'week' && r.sessionDate < weekAgo.toISOString().slice(0, 10)) return false
-      if (dateFilter === 'month' && r.sessionDate < monthAgo.toISOString().slice(0, 10)) return false
-      if (search && !r.ex.name.toLowerCase().includes(search.toLowerCase()) && !r.ex.bodyArea.toLowerCase().includes(search.toLowerCase())) return false
+      const date = r.completedAt.slice(0, 10)
+      if (dateFilter === 'today' && date !== todayISO) return false
+      if (dateFilter === 'week' && date < weekAgo.toISOString().slice(0, 10)) return false
+      if (dateFilter === 'month' && date < monthAgo.toISOString().slice(0, 10)) return false
+      if (search && !r.name.toLowerCase().includes(search.toLowerCase()) && !(r.bodyArea ?? '').toLowerCase().includes(search.toLowerCase())) return false
       return true
     })
   }, [historyRows, dateFilter, catFilter, search])
 
   const streak = useMemo(() => {
-    const days = new Set(allSessions.map(s => s.dateISO ?? '').filter(Boolean))
+    const days = new Set(historyRows.map(r => r.completedAt.slice(0, 10)))
     let count = 0
     const cur = new Date()
     while (true) {
@@ -256,21 +246,23 @@ function ExerciseHistory() {
       cur.setDate(cur.getDate() - 1)
     }
     return count
-  }, [allSessions])
+  }, [historyRows])
 
-  const totalExAll = useMemo(() => allSessions.reduce((s, r) => s + (r.exercisesCompleted ?? 0), 0), [allSessions])
-  const totalSetsAll = useMemo(() => allSessions.reduce((s, r) => s + (r.totalSets ?? 0), 0), [allSessions])
+  const totalExAll = historyRows.length
+  const totalSetsAll = historyRows.reduce((sum, row) => sum + row.sets, 0)
 
   const weekSessions = useMemo(() => {
     const cutoff = weekAgo.toISOString().slice(0, 10)
-    return allSessions.filter(s => (s.dateISO ?? '') >= cutoff)
-  }, [allSessions])
-  const weekWarmup = weekSessions.reduce((s, r) => s + (r.warmupExercises ?? 0), 0)
-  const weekBreaks = weekSessions.reduce((s, r) => s + (r.breakExercises ?? 0), 0)
-  const weekCooldown = weekSessions.reduce((s, r) => s + (r.cooldownExercises ?? 0), 0)
+    return historyRows.filter(r => r.completedAt.slice(0, 10) >= cutoff)
+  }, [historyRows])
+  const weekWarmup = weekSessions.filter(r => r.context === 'before').length
+  const weekBreaks = weekSessions.filter(r => r.context === 'break').length
+  const weekCooldown = weekSessions.filter(r => r.context === 'after').length
   const maxWeek = Math.max(weekWarmup, weekBreaks, weekCooldown, 5)
 
-  if (allSessions.length === 0) {
+  if (loading) return <div className="py-16 text-center text-sm text-moove-muted">Loading exercise history…</div>
+  if (error) return <div className="py-16 text-center text-sm text-red-600">{error}</div>
+  if (historyRows.length === 0) {
     return (
       <div className="py-16 text-center">
         <img src={mascotImg} alt="Moo" className="w-16 h-16 object-contain mx-auto mb-4 animate-float opacity-60" />
@@ -350,16 +342,16 @@ function ExerciseHistory() {
         ) : (
           <div className="space-y-2 max-h-96 overflow-y-auto">
             {filtered.slice(0, 50).map((r, i) => (
-              <div key={i} className="flex items-center gap-3 p-3 rounded-xl bg-moove-cream hover:bg-orange-50 transition-colors">
+              <div key={r.id} className="flex items-center gap-3 p-3 rounded-xl bg-moove-cream hover:bg-orange-50 transition-colors">
                 <span className="text-moove-green font-black shrink-0">✓</span>
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-semibold text-moove-brown">{r.ex.name}</div>
-                  <div className="text-xs text-moove-muted">{r.ex.bodyArea}</div>
+                  <div className="text-sm font-semibold text-moove-brown">{r.name}</div>
+                  <div className="text-xs text-moove-muted">{r.bodyArea ?? 'General'} · {r.context ?? 'session'} · Session {r.sessionId?.slice(0, 8) ?? '—'}</div>
                 </div>
                 <div className="text-right shrink-0">
-                  {r.ex.sets ? <div className="text-xs font-bold text-moove-orange">{r.ex.sets} set{r.ex.sets > 1 ? 's' : ''}</div> : null}
-                  <div className="text-xs text-moove-muted">{r.ex.durationSeconds}s</div>
-                  <div className="text-xs text-moove-muted">{r.sessionDate}</div>
+                  <div className="text-xs font-bold text-moove-orange">{r.sets} set{r.sets !== 1 ? 's' : ''} · Rest {r.restSeconds}s</div>
+                  <div className="text-xs text-moove-muted">{r.durationSeconds}s · {r.status}</div>
+                  <div className="text-xs text-moove-muted">{new Date(r.completedAt).toLocaleString()}</div>
                 </div>
               </div>
             ))}

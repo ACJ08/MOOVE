@@ -2,6 +2,9 @@ import { useMemo, useState, useEffect } from 'react'
 import { useAuth } from '@/context/AuthContext'
 import { exercises } from '@/data/exercises'
 import mascotImg from '@/imports/_MASCOT_REMOVE_BG__MOOVE_CHARACTER.png'
+import { fetchWeeklyExerciseCounts } from '@/services/analyticsService'
+import { fetchInsightInput } from '@/services/analyticsService'
+import { fetchWellnessSummary } from '@/services/ai/wellness'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface SavedSession {
@@ -20,14 +23,6 @@ interface AIInsight {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-function loadSessions(): SavedSession[] {
-  try { return JSON.parse(localStorage.getItem('moove_session_history') || '[]') } catch { return [] }
-}
-
-function loadPrefs(email: string): UserPreferences {
-  try { return JSON.parse(localStorage.getItem(`moove_user_preferences_${email}`) || '{}') } catch { return {} }
-}
-
 function parseHours(s: SavedSession) { return s.drivingSeconds / 3600 }
 
 function sessionDaysAgo(s: SavedSession): number {
@@ -318,19 +313,10 @@ const COLOR_BG: Record<string, string> = {
 }
 
 // ─── Weekly Bar Chart (real data) ─────────────────────────────────────────────
-function WeeklyChart({ sessions }: { sessions: SavedSession[] }) {
-  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-  const data = days.map((label, i) => {
-    const target = new Date()
-    target.setDate(target.getDate() - ((target.getDay() - i + 7) % 7))
-    const dateStr = target.toISOString().slice(0, 10)
-    const daySessions = sessions.filter(s => s.date.slice(0, 10) === dateStr)
-    return {
-      label,
-      exercises: daySessions.reduce((a, s) => a + s.exercisesCompleted, 0),
-      isToday: i === new Date().getDay(),
-    }
-  })
+function WeeklyChart({ counts }: { counts: number[] }) {
+  const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+  const today = (new Date().getDay() + 6) % 7
+  const data = days.map((label, i) => ({ label, exercises: counts[i] ?? 0, isToday: i === today }))
   const maxEx = Math.max(...data.map(d => d.exercises), 1)
 
   return (
@@ -340,7 +326,7 @@ function WeeklyChart({ sessions }: { sessions: SavedSession[] }) {
       <div className="flex items-end gap-2 h-28">
         {data.map(d => (
           <div key={d.label} className="flex flex-col items-center gap-1 flex-1">
-            <div className="text-xs font-bold text-moove-brown">{d.exercises || ''}</div>
+            <div className="text-xs font-bold text-moove-brown">{d.exercises}</div>
             <div className="w-full flex flex-col justify-end h-16 bg-purple-50 rounded-lg overflow-hidden relative">
               {d.exercises > 0 && (
                 <div
@@ -408,17 +394,26 @@ function InsightCard({ insight }: { insight: AIInsight }) {
 export default function AIRecommendations() {
   const { user } = useAuth()
   const isDemo = user?.id === 'demo'
-  const userKey = user?.email ?? user?.id ?? ''
-
   const [sessionVersion, setSessionVersion] = useState(0)
+  const [sessions, setSessions] = useState<SavedSession[]>([])
+  const [prefs, setPrefs] = useState<UserPreferences>({})
+  const [weeklyExerciseCounts, setWeeklyExerciseCounts] = useState<number[]>(Array(7).fill(0))
+  const [weeklyChartError, setWeeklyChartError] = useState<string | null>(null)
+  const [aiSummary, setAiSummary] = useState<string | null>(null)
   useEffect(() => {
     const handler = () => setSessionVersion(v => v + 1)
     window.addEventListener('moove:session-saved', handler)
     return () => window.removeEventListener('moove:session-saved', handler)
   }, [])
 
-  const sessions = useMemo(() => loadSessions(), [sessionVersion])
-  const prefs = useMemo(() => loadPrefs(userKey), [userKey])
+  useEffect(() => { let active = true; const load = async () => { try { const input = await fetchInsightInput(user?.id ?? ''); if (active) { setSessions(input.sessions); setPrefs(input.prefs) } } catch { if (active) { setSessions([]); setPrefs({}) } } }; void load(); return () => { active = false } }, [user?.id, sessionVersion])
+
+  useEffect(() => {
+    let active = true
+    const load = async () => { try { setWeeklyChartError(null); const counts = await fetchWeeklyExerciseCounts(user?.id ?? ''); if (active) setWeeklyExerciseCounts(counts) } catch (error) { if (active) setWeeklyChartError(error instanceof Error ? error.message : 'Unable to load weekly exercise consistency.') } }
+    void load(); window.addEventListener('moove:session-saved', load)
+    return () => { active = false; window.removeEventListener('moove:session-saved', load) }
+  }, [user?.id])
 
   const last7 = sessions.filter(s => {
     const d = new Date(s.date).getTime()
@@ -431,19 +426,19 @@ export default function AIRecommendations() {
     ? Math.round(last7.reduce((a, s) => a + (s.healthScore || 70), 0) / last7.length)
     : 0
 
-  const insights = useMemo(() => generateInsights(sessions, prefs, isDemo), [sessions, prefs, isDemo])
-  const chartSessions = isDemo
-    ? ([
-        { date: new Date(Date.now() - 6 * 86400000).toISOString(), exercisesCompleted: 1 },
-        { date: new Date(Date.now() - 5 * 86400000).toISOString(), exercisesCompleted: 2 },
-        { date: new Date(Date.now() - 4 * 86400000).toISOString(), exercisesCompleted: 0 },
-        { date: new Date(Date.now() - 3 * 86400000).toISOString(), exercisesCompleted: 3 },
-        { date: new Date(Date.now() - 2 * 86400000).toISOString(), exercisesCompleted: 1 },
-        { date: new Date(Date.now() - 1 * 86400000).toISOString(), exercisesCompleted: 2 },
-        { date: new Date().toISOString(), exercisesCompleted: 2 },
-      ] as SavedSession[])
-    : sessions
+  useEffect(() => {
+    if (isDemo || sessions.length === 0) { setAiSummary(null); return }
+    const completedExercises = last7.reduce((sum, session) => sum + session.exercisesCompleted, 0)
+    const skipped = last7.reduce((sum, session) => sum + session.exercisesSkipped, 0)
+    void fetchWellnessSummary({
+      weeklyDrivingMinutes: Math.round(last7.reduce((sum, session) => sum + session.drivingSeconds, 0) / 60),
+      completedExercises, completedSessions: last7.length,
+      exerciseCompletionRate: completedExercises + skipped ? Math.round((completedExercises / (completedExercises + skipped)) * 100) : 0,
+      tiredAreas: Array.isArray(prefs.tired_areas) ? prefs.tired_areas : [],
+    }).then(result => setAiSummary(result.summary)).catch(() => setAiSummary(null))
+  }, [isDemo, sessions, prefs.tired_areas])
 
+  const insights = useMemo(() => generateInsights(sessions, prefs, isDemo), [sessions, prefs, isDemo])
   const displayStreak = isDemo ? 5 : streak
   const displayExWeek = isDemo ? 11 : totalExWeek
   const displayHealthScore = isDemo ? 84 : avgHealthScore
@@ -502,6 +497,13 @@ export default function AIRecommendations() {
         </div>
       </div>
 
+      {aiSummary && (
+        <div className="bg-purple-50 border border-purple-100 rounded-2xl p-5 mb-6">
+          <div className="text-xs font-bold text-moove-purple mb-2 tracking-wide">AI WELLNESS SUMMARY</div>
+          <p className="text-sm text-moove-brown leading-relaxed">{aiSummary}</p>
+        </div>
+      )}
+
       {/* How Moo's AI Works */}
       <div className="bg-white rounded-2xl p-5 card-shadow mb-6">
         <h2 className="font-display font-bold text-moove-brown mb-3">How Moo's AI Works</h2>
@@ -531,7 +533,8 @@ export default function AIRecommendations() {
       </div>
 
       {/* Weekly chart */}
-      <WeeklyChart sessions={chartSessions} />
+      <WeeklyChart counts={weeklyExerciseCounts} />
+      {weeklyChartError && <p className="mt-2 text-xs text-red-600">{weeklyChartError}</p>}
     </div>
   )
 }

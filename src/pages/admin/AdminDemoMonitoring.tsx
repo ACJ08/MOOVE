@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { fetchAllSessionsAdmin, type AdminSessionRow } from '@/lib/db'
 
 interface SessionEntry {
   id: string
@@ -17,15 +18,21 @@ export default function AdminDemoMonitoring() {
   const [sessions, setSessions] = useState<SessionEntry[]>([])
 
   useEffect(() => {
-    try { setSessions(JSON.parse(localStorage.getItem('moove_session_history') || '[]')) } catch { setSessions([]) }
+    const load = async () => setSessions((await fetchAllSessionsAdmin()).map((row: AdminSessionRow) => {
+      const started = new Date(row.startedAt)
+      return {
+        id: row.id,
+        date: started.toLocaleDateString('en-PH'),
+        startTime: started.toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' }),
+        endTime: 'Completed', duration: `${Math.round(row.durationSeconds / 60)} min`,
+        durationSeconds: row.durationSeconds, exercisesCompleted: row.exercisesCompleted,
+        avgRisk: row.avgRisk, calories: 0, notes: '',
+      }
+    }))
+    void load()
+    window.addEventListener('moove:session-saved', load)
+    return () => window.removeEventListener('moove:session-saved', load)
   }, [])
-
-  const demoSessions = sessions.filter(s => s.id?.startsWith('sess_'))
-
-  const handleClear = () => {
-    localStorage.removeItem('moove_session_history')
-    setSessions([])
-  }
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
@@ -34,11 +41,6 @@ export default function AdminDemoMonitoring() {
           <h1 className="font-display font-black text-2xl text-moove-brown mb-1">Demo Monitoring</h1>
           <p className="text-sm text-moove-muted">Simulated and real driving sessions recorded during testing.</p>
         </div>
-        {sessions.length > 0 && (
-          <button onClick={handleClear} className="text-xs font-bold px-4 py-2.5 rounded-xl bg-red-50 text-red-500 border border-red-200 hover:bg-red-100 transition-all">
-            Clear All Sessions
-          </button>
-        )}
       </div>
 
       <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-5 text-xs text-amber-700">
@@ -46,7 +48,7 @@ export default function AdminDemoMonitoring() {
         Sessions created using the Developer Testing Panel (Demo Mode) appear here. They are marked with their session ID. Real participant sessions will also appear in the Research Dashboard analytics.
       </div>
 
-      {demoSessions.length === 0 ? (
+      {sessions.length === 0 ? (
         <div className="bg-white rounded-2xl p-10 card-shadow text-center">
           <div className="text-4xl mb-3">🧪</div>
           <div className="font-display font-bold text-xl text-moove-brown mb-2">No Demo Sessions Yet</div>
@@ -54,7 +56,7 @@ export default function AdminDemoMonitoring() {
         </div>
       ) : (
         <div className="flex flex-col gap-3">
-          {demoSessions.map(s => {
+          {sessions.map(s => {
             const riskColors: Record<string, string> = { Low: '#22C55E', Moderate: '#FBBF24', High: '#F97316', 'Very High': '#EF4444' }
             return (
               <div key={s.id} className="bg-white rounded-2xl p-5 card-shadow">

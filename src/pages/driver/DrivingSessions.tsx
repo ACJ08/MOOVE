@@ -6,8 +6,10 @@ import { mockSessions, mockWeeklyActivity } from '@/data/mockData'
 import mascotImg from '@/imports/_MASCOT_REMOVE_BG__MOOVE_CHARACTER.png'
 import { triggerBreakReminder, playExerciseStartSound, playRestStartSound, playCompleteSound } from '@/services/notificationService'
 import ExerciseVideo from '@/components/ExerciseVideo'
-import { saveSessionToSupabase, createDrivingSession, recordExerciseCompletion, recordSessionEvent } from '@/lib/db'
+import { saveSessionToSupabase, createDrivingSession, recordExerciseCompletion, recordSessionEvent, fetchRecentSessionsFromDB } from '@/lib/db'
+import { fetchWeeklyDriving, type WeeklyDriving } from '@/services/analyticsService'
 import { getExerciseVideo } from '@/data/exerciseVideos'
+import { supabase } from '@/lib/supabase'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -183,15 +185,6 @@ interface ActiveSessionPersist {
   intervalMins: number; note: string; sessionState: 'running' | 'paused'
   completedBeforeIds?: string[]; completedAfterIds?: string[]; completedBreakIds?: number[]
   activeDbSessionId?: string | null
-}
-
-function loadSavedSessions(): SavedSession[] {
-  try { return JSON.parse(localStorage.getItem('moove_session_history') || '[]') } catch { return [] }
-}
-
-function saveSessionRecord(s: SavedSession) {
-  const existing = loadSavedSessions()
-  localStorage.setItem('moove_session_history', JSON.stringify([s, ...existing].slice(0, 50)))
 }
 
 // ─── ContextExerciseCard ──────────────────────────────────────────────────────
@@ -1323,7 +1316,7 @@ export default function DrivingSessions() {
   const [timeline, setTimeline] = useState<TimelineEvent[]>([])
   const [lastReminderAt, setLastReminderAt] = useState(0)
 
-  const [savedSessions, setSavedSessions] = useState<SavedSession[]>(loadSavedSessions)
+  const [savedSessions, setSavedSessions] = useState<SavedSession[]>([])
   const [showEndConfirm, setShowEndConfirm] = useState(false)
   const [showRecommendation, setShowRecommendation] = useState(false)
   const [view, setView] = useState<ViewMode>('main')
@@ -1344,6 +1337,33 @@ export default function DrivingSessions() {
     exercisesSkipped: number; exerciseHistory: CompletedExercise[]; timeline: TimelineEvent[]
   } | null>(null)
   const [activeDbSessionId, setActiveDbSessionId] = useState<string | null>(null)
+  const [weeklyDriving, setWeeklyDriving] = useState<WeeklyDriving | null>(null)
+  const [weeklyError, setWeeklyError] = useState<string | null>(null)
+
+  const refreshWeeklyDriving = useCallback(async () => {
+    if (!user?.id) return
+    try { setWeeklyError(null); setWeeklyDriving(await fetchWeeklyDriving(user.id)) } catch (error) { setWeeklyError(error instanceof Error ? error.message : 'Unable to load weekly activity.') }
+  }, [user?.id])
+  useEffect(() => { void refreshWeeklyDriving() }, [refreshWeeklyDriving])
+
+  useEffect(() => {
+    if (!supabase || !user?.id || isDemo) return
+    const channel = supabase.channel(`weekly-driving-${user.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'driving_sessions', filter: `user_id=eq.${user.id}` }, () => void refreshWeeklyDriving())
+      .subscribe()
+    return () => { void supabase.removeChannel(channel) }
+  }, [user?.id, isDemo, refreshWeeklyDriving])
+
+  useEffect(() => {
+    if (!user?.id || isDemo) return
+    const load = async () => {
+      try { setSavedSessions(await fetchRecentSessionsFromDB(user.id, 100)) }
+      catch (error) { console.warn('[MOOVE] Could not load session history:', error) }
+    }
+    void load()
+    window.addEventListener('moove:session-saved', load)
+    return () => window.removeEventListener('moove:session-saved', load)
+  }, [user?.id, isDemo])
 
   const sessionRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const drivingRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -1499,14 +1519,13 @@ export default function DrivingSessions() {
       calories: Math.round((sessionElapsed / 60) * 1.5),
       avgRisk: risk.level, notes: note, healthScore, totalSets,
     }
-    saveSessionRecord(session)
-    setSavedSessions(loadSavedSessions())
+    // The completed session is persisted in Supabase; do not maintain a second history in localStorage.
     localStorage.removeItem('moove_active_session')
-    window.dispatchEvent(new CustomEvent('moove:session-saved'))
-    // Save to Supabase (fire-and-forget — localStorage is already saved)
+    // Notify dependent screens only after the authoritative write completes.
     if (user?.id) {
       saveSessionToSupabase(user.id, session, exerciseHistory, activeDbSessionId).then(({ error }) => {
         if (error) console.warn('[MOOVE] Supabase session save failed (local saved):', error)
+        else { void refreshWeeklyDriving(); window.dispatchEvent(new CustomEvent('moove:session-saved')) }
       })
       void recordSessionEvent(user.id, activeDbSessionId, 'completed', sessionElapsed, { drivingSeconds: drivingElapsed, exercisesCompleted })
     }
@@ -1699,7 +1718,7 @@ export default function DrivingSessions() {
   const nextBreakSecs = sessionState !== 'idle' ? Math.max(0, effectiveIntervalSecs - (sessionElapsed % effectiveIntervalSecs)) : 0
   const progressPct = Math.min(100, ((sessionElapsed % effectiveIntervalSecs) / effectiveIntervalSecs) * 100)
   const riskProgressPct = Math.min(100, (Math.floor(drivingElapsed / 60) / 91) * 100)
-  const maxDriving = Math.max(...mockWeeklyActivity.map(d => d.driving), 1)
+  const maxDriving = Math.max(...(weeklyDriving?.days.map(d => d.hours) ?? [1]), 1)
 
   // ── Sub-screen routing ────────────────────────────────────────────────────
 
@@ -2109,21 +2128,22 @@ export default function DrivingSessions() {
         <div className="bg-white rounded-2xl p-5 card-shadow">
           <h2 className="font-display font-bold text-moove-brown mb-4">Weekly Driving Activity</h2>
           <div className="flex items-end gap-2 h-36">
-            {mockWeeklyActivity.map(d => (
-              <div key={d.day} className="flex flex-col items-center gap-1.5 flex-1">
-                <div className="text-xs font-bold text-moove-brown">{d.driving > 0 ? `${d.driving}h` : '—'}</div>
+            {(weeklyDriving?.days ?? []).map(d => (
+              <div key={d.label} className="flex flex-col items-center gap-1.5 flex-1">
+                <div className="text-xs font-bold text-moove-brown">{d.hours > 0 ? `${d.hours}h` : '0h'}</div>
                 <div className="w-full flex flex-col justify-end h-24 bg-orange-50 rounded-lg overflow-hidden">
-                  {d.driving > 0 && <div className="w-full rounded-t-lg" style={{ height: `${(d.driving / maxDriving) * 100}%`, background: 'linear-gradient(to top, #F97316, #FBBF24)' }} />}
+                  {d.hours > 0 && <div className="w-full rounded-t-lg" style={{ height: `${Math.max(5, (d.hours / maxDriving) * 100)}%`, background: 'linear-gradient(to top, #F97316, #FBBF24)' }} />}
                 </div>
-                <div className="text-xs text-moove-muted">{d.day}</div>
+                <div className="text-xs text-moove-muted">{d.label}</div>
               </div>
             ))}
           </div>
           <div className="mt-4 pt-4 border-t border-moove-border grid grid-cols-3 gap-3">
-            <div className="text-center"><div className="font-display font-black text-xl text-moove-brown">5</div><div className="text-xs text-moove-muted">Days Active</div></div>
-            <div className="text-center"><div className="font-display font-black text-xl text-moove-brown">12.4h</div><div className="text-xs text-moove-muted">Total Driving</div></div>
-            <div className="text-center"><div className="font-display font-black text-xl text-moove-brown">17</div><div className="text-xs text-moove-muted">Exercises Done</div></div>
+            <div className="text-center"><div className="font-display font-black text-xl text-moove-brown">{weeklyDriving?.daysActive ?? '—'}</div><div className="text-xs text-moove-muted">Days Active</div></div>
+            <div className="text-center"><div className="font-display font-black text-xl text-moove-brown">{weeklyDriving ? `${(weeklyDriving.totalSeconds / 3600).toFixed(1)}h` : '—'}</div><div className="text-xs text-moove-muted">Total Driving</div></div>
+            <div className="text-center"><div className="font-display font-black text-xl text-moove-brown">{weeklyDriving?.exercisesDone ?? '—'}</div><div className="text-xs text-moove-muted">Exercises Done</div></div>
           </div>
+          {weeklyError && <p className="mt-3 text-xs text-red-600">{weeklyError}</p>}
         </div>
       </div>
 

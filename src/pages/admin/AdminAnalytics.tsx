@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { fetchAdminAnalytics, type AdminAnalyticsStats } from '@/lib/db'
+import { fetchAdminAnalytics, fetchAllSessionsAdmin, type AdminAnalyticsStats, type AdminSessionRow } from '@/lib/db'
 
 interface LocalSession {
   durationSeconds: number
@@ -19,31 +19,35 @@ function avg(arr: number[]): number {
 const riskColors: Record<string, string> = { Low: '#22C55E', Moderate: '#FBBF24', High: '#F97316', 'Very High': '#EF4444' }
 
 export default function AdminAnalytics() {
-  const [localSessions, setLocalSessions] = useState<LocalSession[]>([])
+  const [sessions, setSessions] = useState<AdminSessionRow[]>([])
   const [supabaseStats, setSupabaseStats] = useState<AdminAnalyticsStats | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    try { setLocalSessions(JSON.parse(localStorage.getItem('moove_session_history') || '[]')) } catch { setLocalSessions([]) }
-
-    fetchAdminAnalytics(30).then(stats => {
-      setSupabaseStats(stats)
-      setLoading(false)
-    }).catch(() => setLoading(false))
+    const load = async () => {
+      try {
+        const [stats, history] = await Promise.all([fetchAdminAnalytics(3650), fetchAllSessionsAdmin()])
+        setSupabaseStats(stats); setSessions(history)
+      } finally { setLoading(false) }
+    }
+    void load()
+    const refresh = () => void load()
+    window.addEventListener('moove:session-saved', refresh)
+    return () => window.removeEventListener('moove:session-saved', refresh)
   }, [])
 
   // Merge: prefer Supabase stats if available, supplement with local
   const hasSupa = supabaseStats && supabaseStats.totalSessions > 0
 
-  const totalSessions = hasSupa ? supabaseStats!.totalSessions : localSessions.length
-  const avgDuration = hasSupa ? supabaseStats!.avgDurationMinutes : avg(localSessions.map(s => s.durationSeconds / 60))
-  const avgExercises = avg(localSessions.map(s => s.exercisesCompleted))
-  const avgCalories = avg(localSessions.map(s => s.calories || 0))
+  const totalSessions = hasSupa ? supabaseStats!.totalSessions : sessions.length
+  const avgDuration = hasSupa ? supabaseStats!.avgDurationMinutes : avg(sessions.map(s => s.durationSeconds / 60))
+  const avgExercises = avg(sessions.map(s => s.exercisesCompleted))
+  const avgCalories = 0
   const exerciseRate = hasSupa
     ? supabaseStats!.exerciseCompletionRate
     : (() => {
-        const completed = localSessions.reduce((a, s) => a + s.exercisesCompleted, 0)
-        const skipped = localSessions.reduce((a, s) => a + (s.exercisesSkipped || 0), 0)
+        const completed = sessions.reduce((a, s) => a + s.exercisesCompleted, 0)
+        const skipped = sessions.reduce((a, s) => a + (s.exercisesSkipped || 0), 0)
         return completed + skipped > 0 ? Math.round(completed / (completed + skipped) * 100) : 0
       })()
 
@@ -51,7 +55,7 @@ export default function AdminAnalytics() {
     ? { Low: supabaseStats!.riskDistribution.Low, Moderate: supabaseStats!.riskDistribution.Moderate, High: supabaseStats!.riskDistribution.High, 'Very High': 0 }
     : { Low: 0, Moderate: 0, High: 0, 'Very High': 0 }
 
-  if (!hasSupa) localSessions.forEach(s => { if (riskCounts[s.avgRisk] !== undefined) riskCounts[s.avgRisk]++ })
+  if (!hasSupa) sessions.forEach(s => { if (riskCounts[s.avgRisk] !== undefined) riskCounts[s.avgRisk]++ })
 
   const isEmpty = totalSessions === 0 && !loading
 
@@ -60,7 +64,7 @@ export default function AdminAnalytics() {
     ? supabaseStats!.dailyActiveUsers.slice(-14)
     : (() => {
         const map: Record<string, number> = {}
-        localSessions.forEach(s => { const d = s.dateISO || s.date; map[d] = (map[d] || 0) + 1 })
+        sessions.forEach(s => { const d = s.startedAt.slice(0, 10); map[d] = (map[d] || 0) + 1 })
         return Object.entries(map).slice(-14).map(([date, count]) => ({ date, count }))
       })()
 
@@ -172,9 +176,9 @@ export default function AdminAnalytics() {
           <div className="bg-white rounded-2xl p-5 card-shadow lg:col-span-2">
             <div className="text-xs font-bold text-moove-muted mb-4 tracking-wide">RECENT SESSIONS TIMELINE</div>
             <div className="flex flex-col gap-2 max-h-64 overflow-y-auto">
-              {localSessions.slice(0, 15).map((s, i) => (
+              {sessions.slice(0, 15).map((s, i) => (
                 <div key={i} className="flex items-center gap-4 p-3 rounded-xl bg-moove-cream text-xs">
-                  <div className="font-bold text-moove-brown shrink-0">{s.date}</div>
+                  <div className="font-bold text-moove-brown shrink-0">{new Date(s.startedAt).toLocaleDateString('en-PH')}</div>
                   <div className="flex-1 text-moove-muted">{Math.round(s.durationSeconds / 60)} min · {s.exercisesCompleted} exercises</div>
                   <div className="font-bold shrink-0" style={{ color: riskColors[s.avgRisk] || '#9E8B7D' }}>{s.avgRisk} risk</div>
                 </div>

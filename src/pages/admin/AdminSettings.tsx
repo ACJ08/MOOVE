@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { fetchTestingConfig, saveTestingConfig, type TestingConfig } from '@/lib/db'
+import { fetchTestingConfig, saveTestingConfig, fetchAdminSettings, saveAdminSettings, type TestingConfig } from '@/lib/db'
 
 interface StudyConfig {
   participantQuota: number
@@ -8,16 +8,6 @@ interface StudyConfig {
   sedentaryAlertThreshold: number
   breakReminderInterval: number
   exportAnonymized: boolean
-}
-
-const STORAGE_KEY = 'moove_admin_settings'
-
-function loadConfig(): StudyConfig {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (raw) return { ...defaultConfig(), ...JSON.parse(raw) }
-  } catch { /* ignore */ }
-  return defaultConfig()
 }
 
 function defaultConfig(): StudyConfig {
@@ -82,13 +72,25 @@ const DEFAULT_TESTING: TestingConfig = {
 }
 
 export default function AdminSettings() {
-  const [config, setConfig] = useState<StudyConfig>(loadConfig)
+  const [config, setConfig] = useState<StudyConfig>(defaultConfig)
   const [testing, setTesting] = useState<TestingConfig>(DEFAULT_TESTING)
   const [saved, setSaved] = useState(false)
   const [testingSaved, setTestingSaved] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    fetchTestingConfig().then(cfg => setTesting(cfg))
+    Promise.all([
+      fetchTestingConfig(),
+      fetchAdminSettings(['participant_quota', 'study_phase', 'data_retention_days', 'sedentary_alert_threshold', 'break_reminder_interval', 'export_anonymized']),
+    ]).then(([testingConfig, settings]) => {
+      setTesting(testingConfig)
+      setConfig(current => ({ ...current,
+        participantQuota: Number(settings.participant_quota ?? current.participantQuota), studyPhase: settings.study_phase ?? current.studyPhase,
+        dataRetentionDays: Number(settings.data_retention_days ?? current.dataRetentionDays), sedentaryAlertThreshold: Number(settings.sedentary_alert_threshold ?? current.sedentaryAlertThreshold),
+        breakReminderInterval: Number(settings.break_reminder_interval ?? current.breakReminderInterval), exportAnonymized: settings.export_anonymized !== undefined ? settings.export_anonymized === 'true' : current.exportAnonymized,
+      }))
+    }).catch(error => setError(error instanceof Error ? error.message : 'Unable to load settings.'))
   }, [])
 
   const update = <K extends keyof StudyConfig>(key: K, val: StudyConfig[K]) =>
@@ -97,22 +99,26 @@ export default function AdminSettings() {
   const updateTesting = <K extends keyof TestingConfig>(key: K, val: TestingConfig[K]) =>
     setTesting(c => ({ ...c, [key]: val }))
 
-  const handleSave = () => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(config))
-    setSaved(true)
-    setTimeout(() => setSaved(false), 3000)
+  const handleSave = async () => {
+    setSaving(true); setError(null)
+    try {
+      await saveAdminSettings({ participant_quota: String(config.participantQuota), study_phase: config.studyPhase, data_retention_days: String(config.dataRetentionDays), sedentary_alert_threshold: String(config.sedentaryAlertThreshold), break_reminder_interval: String(config.breakReminderInterval), export_anonymized: String(config.exportAnonymized) })
+      setSaved(true); setTimeout(() => setSaved(false), 3000)
+    } catch (error) { setError(error instanceof Error ? error.message : 'Unable to save settings.') }
+    finally { setSaving(false) }
   }
 
   const handleSaveTesting = async () => {
-    await saveTestingConfig(testing)
-    setTestingSaved(true)
-    setTimeout(() => setTestingSaved(false), 3000)
+    setSaving(true); setError(null)
+    try { await saveTestingConfig(testing); setTesting(await fetchTestingConfig()); setTestingSaved(true); setTimeout(() => setTestingSaved(false), 3000) }
+    catch (error) { setError(error instanceof Error ? error.message : 'Unable to save testing configuration.') }
+    finally { setSaving(false) }
   }
 
   const handleReset = () => {
     const d = defaultConfig()
     setConfig(d)
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(d))
+    void saveAdminSettings({ participant_quota: String(d.participantQuota), study_phase: d.studyPhase, data_retention_days: String(d.dataRetentionDays), sedentary_alert_threshold: String(d.sedentaryAlertThreshold), break_reminder_interval: String(d.breakReminderInterval), export_anonymized: String(d.exportAnonymized) }).catch(error => setError(error instanceof Error ? error.message : 'Unable to reset settings.'))
   }
 
   const clearTestData = () => {
