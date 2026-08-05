@@ -1,712 +1,371 @@
-# MOOVE — Driver Preventive Health & Wellness App
+# MOOVE
 
-> **"Move a little. Drive a lot."**
+<p align="center">
+  <img src="src/imports/_REMOVE_BG__MOOVE.png" alt="MOOVE logo" width="220" />
+</p>
 
-MOOVE is a Progressive Web App designed for Filipino professional drivers. It monitors sedentary driving time, prompts micro-movement exercise breaks, tracks driving sessions, and delivers an AI-powered coaching engine — all within a research-grade prototype built for the **UNLEASH 2026** hackathon (Technology Readiness Level 4).
+<p align="center"><strong>Preventive wellness support for people who spend long hours driving.</strong></p>
 
----
+MOOVE is a responsive web application for Filipino drivers that turns long sedentary driving periods into opportunities for safe, short movement breaks. It combines driving-session tracking, a context-rated exercise library, wellness summaries, reminder preferences, and a research-facing administration area for usability validation.
 
-## Table of Contents
-
-- [Overview](#overview)
-- [Features](#features)
-- [Technology Stack](#technology-stack)
-- [Project Structure](#project-structure)
-- [Application Architecture](#application-architecture)
-- [Database Schema](#database-schema)
-- [Authentication](#authentication)
-- [Exercise System](#exercise-system)
-- [Driving Session](#driving-session)
-- [AI Recommendation Engine](#ai-recommendation-engine)
-- [Admin Portal](#admin-portal)
-- [Research Tools](#research-tools)
-- [Installation](#installation)
-- [Environment Variables](#environment-variables)
-- [Available Scripts](#available-scripts)
-- [Screenshots](#screenshots)
-- [Known Limitations](#known-limitations)
-- [Future Improvements](#future-improvements)
-- [Contributing](#contributing)
-- [License](#license)
-- [Acknowledgements](#acknowledgements)
-
----
+> **Scope notice:** MOOVE provides preventive wellness guidance only. It is not a diagnostic, treatment, or emergency service. Exercises and breaks must only be performed when it is safe to do so—typically while parked or stopped as indicated in the application.
 
 ## Overview
 
-### Problem Statement
+Long periods behind the wheel can make it difficult for drivers to notice or act on discomfort, fatigue, and prolonged inactivity. MOOVE is designed for private-car, ride-hailing, taxi, delivery, truck, bus, and van drivers who need practical movement prompts that fit around real driving routines.
 
-Professional drivers in the Philippines spend 8–12+ hours per day seated behind the wheel. Prolonged sedentary driving is directly linked to musculoskeletal disorders, cardiovascular disease, chronic fatigue, and impaired concentration — yet no accessible, driver-specific wellness tool exists in the local market.
+The application guides a driver through onboarding, an optional pre-drive warm-up, an active session with configurable break reminders, and a post-session summary. It records completed sessions and exercise history in Supabase when configured, and surfaces personal activity, sedentary time, wellness engagement, and recommendations. Researchers and administrators have separate routes for participant, session, feedback, and testing configuration review.
 
-### Solution
+## Problem statement
 
-MOOVE provides:
+Drivers can experience prolonged static sitting, repetitive steering and pedal work, constrained posture, and limited opportunities to take a restorative break. These conditions can contribute to musculoskeletal discomfort and fatigue, while a conventional exercise program may not fit intermittent or extended work shifts. Preventive tools also need to respect a critical constraint: a wellness suggestion must never distract someone from driving.
 
-- **Sedentary monitoring** with real-time risk alerts
-- **Context-aware exercise recommendations** (safe to do in traffic vs. parked)
-- **Guided micro-movement breaks** with video demonstrations and timed exercise sessions
-- **Health tracking** across sessions, exercises, and wellness scores
-- **An AI coaching engine ("Moo")** that delivers personalized insights based on driving patterns and body preferences
-- **A research administration portal** for collecting structured usability evidence during controlled testing
+MOOVE addresses this gap with brief, context-aware micro-movements and behavioral feedback. Rather than presenting a clinical diagnosis or requiring a long workout, it helps drivers track time in a session, recognize increasing sedentary exposure, and select exercises appropriate to traffic, a parked vehicle, before driving, or after driving. The research modules support structured feedback and think-aloud testing so the experience can be evaluated and improved.
 
-### Target Users
+## Proposed solution
 
-- **Primary:** Filipino professional drivers (ride-hailing, taxi, delivery, truck, bus, van, private)
-- **Secondary:** Occupational health researchers and study administrators (UNLEASH-2026 evaluation team)
+MOOVE combines the following implemented elements:
 
----
+- A timed driving-session workflow with pause/resume, break, warm-up, cooldown, and completion states.
+- Ten exercise records with instructions, duration, target areas, safety notes, contextual safety ratings, and demonstration videos where available.
+- Recommendation selection that considers the current context, recent exercises, completed exercises, and a driver's reported problem areas.
+- Configurable movement-break intervals and delivery styles: browser pop-up, sound, vibration, or silent in-app reminder.
+- Supabase-backed storage for profiles, preferences, driving sessions, exercise history, health metrics, feedback, administrator settings, onboarding profiles, and session events.
+- An optional server-side Groq-powered weekly wellness summary with a deterministic safety-focused fallback when no API key is present or the provider is unavailable.
 
-## Features
+## Key features
 
-### Implemented Features
+### Driver application
 
-**Driver App**
-- Email/password authentication via Supabase Auth with protected routes
-- 7-step onboarding wizard capturing driver type, hours, tired body areas, and reminder preferences
-- Real-time driving session timer with sedentary risk level tracking
-- Context-aware exercise recommendation engine (traffic-safe vs. parked-only)
-- Before-Driving Warm-Up: 10 exercises with independent per-exercise completion tracking
-- After-Driving Cool-Down: 10 exercises with independent per-exercise completion tracking
-- Movement Break system: mid-drive exercise prompts with configurable reminder intervals (15 / 30 / 45 / 60 min)
-- Exercise configuration screen: customizable sets, duration per set, and rest between sets
-- Video-guided exercise player with timed set/rest phases and audio cues
-- Per-exercise immediate persistence to Supabase (`exercise_history`) during sessions
-- Session history saved locally and synced to Supabase (`driving_sessions`)
-- Health dashboard with wellness scores and trend metrics
-- AI Insights engine ("Moo") — rule-based, personalized, no external API required
-- Exercise Library with 10 exercises, video demonstrations, and category filters
-- Health Education: 8 pre-seeded learn modules covering posture, fatigue, eye care, and more
-- In-app TRL-4 usability survey (4-step feedback form, synced to Supabase)
-- Think-Aloud protocol tool for moderated research sessions
-- Research KPI dashboard showing live UNLEASH validation metrics
-- Settings: notification style (popup / sound / vibration / silent), accessibility options, profile fields
-- Responsive layout with warm MOOVE brand palette
+| Area | What is implemented |
+| --- | --- |
+| Authentication | Email/password registration, sign-in, sign-out, password-reset request, Supabase session restoration, and local/demo fallback paths. |
+| Onboarding | Eight-step setup captures vehicle/driver type, daily driving duration, schedule, problem areas, reminder interval/style, warm-up preference, and notification preference. It writes to `profiles`, `user_preferences`, and `driver_profiles`. |
+| Driving sessions | Start, pause, resume, recover an active session after refresh, take context-specific breaks, complete or skip exercises, optionally do warm-up/cooldown exercises, add notes, and save a final session report. |
+| Sedentary monitoring | Session elapsed and sedentary duration produce Low, Moderate, High, or Very High risk guidance in the session flow. A separate monitor summarizes sessions. |
+| Exercise library | Ten guided micro-movements, grouped as Upper Body and Lower Body & Eyes, with filters/details, safety context ratings, instructions, repetitions, and video playback. |
+| Health views | Dashboard and preventive health dashboard present activity, driving, sedentary, streak, exercise, and engagement summaries. Supabase-backed views are used for non-demo data where implemented; demo/mock states remain available. |
+| AI insights | The recommendation page derives behavioral insights from completed sessions and onboarding preferences. The completed-session flow also creates a local heuristic summary; the weekly wellness API can produce a Groq summary. |
+| Health education | Four built-in educational articles on prolonged sitting, micro-movements, safe stretching, and preventive wellness. |
+| Feedback and testing | Structured feedback captures ratings, task success, feature impressions, improvement requests, device/browser information, and free text. Think-aloud testing offers ten moderated usability questions and stores responses locally. |
+| Settings | Profile fields and notification/reminder preferences can be updated. |
 
-**Admin Portal**
-- Participant list from Supabase profiles
-- Aggregated feedback analytics (ratings, distributions, feature mentions)
-- Time-series analytics (sessions/day, exercises/day, DAU)
-- Demo session monitoring for live showcase events
-- Study configuration (participant quota, study phase, alert thresholds)
-- Testing session configuration synced to Supabase via secure RPC
-- Think-Aloud response aggregation across all participants
+### Research and administrator application
 
-**Infrastructure**
-- Supabase-first with localStorage fallback for every read and write
-- Partial session record created at session START for crash recovery (updated at END)
-- Immediate per-exercise Supabase writes during sessions
-- Unique dedup index on `exercise_history` prevents duplicate records
-- `SECURITY DEFINER` RPC (`upsert_admin_setting`) for privileged writes without broad table GRANTs
-- `get_my_role()` SECURITY DEFINER function eliminates RLS recursion on admin policies
+| Module | Data and behavior |
+| --- | --- |
+| Research Dashboard | Displays research KPIs, desirability/feasibility/viability indicators, feature feedback, intent, session, and bug summaries. It includes local testing-data support. |
+| Participants | Lists feedback participants from Supabase where available, with local feedback fallback. |
+| Analytics | Calculates session duration, exercise completion, session count, and participant metrics from administrator session queries. |
+| Feedback Analytics | Reviews detailed feedback, ratings, bugs, action plans, and iteration notes. Some testing artifacts are intentionally local-browser data. |
+| Demo Monitoring | Shows Supabase administrator session records and listens for saved-session events in the current browser. |
+| Settings | Manages testing configuration through `admin_settings` and a local cache; database writes use an admin-checked RPC. |
+| Think-Aloud | Reuses the moderated driver think-aloud component under an administrator route. |
 
-### Planned / Partially Implemented Features
+### Safety and resilience
 
-- Supabase Realtime subscriptions for live dashboard updates
-- Materialized view refresh automation (`mv_weekly_exercise_stats`)
-- Web Push API for background break reminders when the app is minimized
-- Avatar upload to Supabase Storage
-- Password reset flow (UI exists; requires Supabase SMTP configuration)
-- Expanded exercise library beyond the current 10 exercises
-- Multi-language support (`preferred_language` field exists in `user_preferences`)
-- High-contrast accessibility mode (`high_contrast` field exists; UI not fully wired)
-
----
-
-## Technology Stack
-
-| Category | Technology |
-|---|---|
-| **UI Framework** | React 19 |
-| **Language** | TypeScript 5.7 |
-| **Build Tool** | Vite 8 |
-| **Routing** | React Router v8 (lazy-loaded, code-split pages) |
-| **Styling** | Tailwind CSS v4 (`@tailwindcss/vite` plugin) |
-| **Backend / Database** | Supabase (PostgreSQL 15, Row Level Security) |
-| **Authentication** | Supabase Auth (email/password, JWT sessions) |
-| **State Management** | React Context (`AuthContext`), `useState` / `useEffect` per page |
-| **Persistence Fallback** | `localStorage` (all reads/writes mirrored) |
-| **AI Engine** | Client-side rule engine (no external LLM API) |
-| **Media** | Bundled MP4 exercise videos via Vite asset imports |
-| **Notifications** | Web Notifications API + Web Audio API + Vibration API |
-| **Formatting** | oxfmt |
-| **Platform** | Figma Make (Vite dev server on `$PORT`, default 8443) |
-| **Package Manager** | pnpm |
-| **Toolchain Manager** | mise (`.mise.toml`) |
-
----
-
-## Project Structure
-
-```text
-/
-├── index.html                          Vite HTML shell (#root mount point)
-├── vite.config.ts                      Vite + React + Tailwind CSS v4 config
-├── package.json                        Dependencies and scripts
-├── .mise.toml                          Node.js and pnpm version pins
-└── src/
-    ├── main.tsx                        React entrypoint; imports index.css, mounts App
-    ├── App.tsx                         ErrorBoundary → AuthProvider → RouterProvider
-    ├── routes.tsx                      createBrowserRouter with all route definitions
-    ├── index.css                       Tailwind v4 import, design tokens, global styles
-    │
-    ├── context/
-    │   └── AuthContext.tsx             Auth state, login, register, updateUser, demo mode
-    │
-    ├── lib/
-    │   ├── supabase.ts                 Singleton Supabase client + Database type stubs
-    │   ├── db.ts                       All DB operations (sessions, exercises, health, admin)
-    │   ├── migrations.sql              Complete PostgreSQL schema, RLS policies, seeds, grants
-    │   └── hotfix_admin_settings_permissions.sql  Standalone admin_settings patch
-    │
-    ├── data/
-    │   ├── exercises.ts                10 exercise definitions with full metadata
-    │   ├── exerciseVideos.ts           Exercise ID → bundled mp4 URL mapping
-    │   └── mockData.ts                 Static mock data for the demo account
-    │
-    ├── services/
-    │   └── notificationService.ts      Web Notifications, Web Audio, Vibration APIs
-    │
-    ├── components/
-    │   ├── ErrorBoundary.tsx           React class error boundary with fallback UI
-    │   └── ExerciseVideo.tsx           Muted, looping video player for exercise demos
-    │
-    ├── layouts/
-    │   ├── DriverLayout.tsx            Sidebar nav + outlet for /driver/* routes
-    │   └── AdminLayout.tsx             Sidebar nav + outlet for /admin/* routes
-    │
-    ├── pages/
-    │   ├── LandingPage.tsx             Public marketing / hero page
-    │   ├── auth/
-    │   │   ├── LoginPage.tsx
-    │   │   ├── RegisterPage.tsx
-    │   │   └── ForgotPasswordPage.tsx
-    │   ├── driver/
-    │   │   ├── Dashboard.tsx           Home: stat cards, badges, weekly activity chart
-    │   │   ├── DrivingSessions.tsx     Session timer, exercise flows, real-time DB writes
-    │   │   ├── GuidedExercises.tsx     Browsable exercise library with video player
-    │   │   ├── AIRecommendations.tsx   "Moo" coaching engine, personalized insights
-    │   │   ├── SedentaryMonitoring.tsx Sedentary risk display and historical data
-    │   │   ├── HealthDashboard.tsx     Health metrics charts and trend view
-    │   │   ├── HealthEducation.tsx     8 pre-seeded learn modules
-    │   │   ├── FeedbackValidation.tsx  4-step TRL-4 usability survey
-    │   │   ├── Settings.tsx            Notification prefs, profile, accessibility
-    │   │   ├── OnboardingSetup.tsx     7-question onboarding wizard
-    │   │   ├── ResearchDashboard.tsx   UNLEASH KPI tracker with live validation scores
-    │   │   └── ThinkAloud.tsx          Moderated think-aloud protocol (10 questions)
-    │   └── admin/
-    │       ├── AdminDashboard.tsx      Aggregated research KPIs and rating summaries
-    │       ├── AdminParticipants.tsx   Participant list from Supabase profiles
-    │       ├── AdminAnalytics.tsx      Time-series session and exercise charts
-    │       ├── AdminFeedback.tsx       All feedback submissions with distributions
-    │       ├── AdminDemoMonitoring.tsx Live demo session monitoring
-    │       ├── AdminSettings.tsx       Study config + testing session config
-    │       └── AdminThinkAloud.tsx     Aggregated think-aloud responses
-    │
-    └── assets/
-        └── videos/
-            ├── Chin_Tucks.mp4
-            ├── Upper_Trapezius_Stretch.mp4
-            ├── Shoulder_Rolls.mp4
-            ├── Wrist_Flexor_Stretch.mp4
-            ├── Figure-4_Glute_Stretch.mp4
-            ├── Heel_Raise_and_Toe_Raise.mp4
-            ├── Standing_Calf_Stretch.mp4
-            ├── Standing_Side_Stretch.mp4
-            ├── 20-20-20_Eye_Reset.mp4
-            └── Quad_Squeeze.mp4
-```
-
-**Key folder purposes:**
-
-| Folder | Purpose |
-|---|---|
-| `context/` | Global React Context providers (Auth state) |
-| `lib/` | Supabase client, all database operations, SQL schema |
-| `data/` | Static exercise definitions, video mappings, mock data |
-| `services/` | Browser API wrappers (notifications, audio, vibration) |
-| `components/` | Reusable UI components shared across pages |
-| `layouts/` | Page shells with navigation sidebars |
-| `pages/driver/` | All driver-facing feature pages |
-| `pages/admin/` | All admin/research portal pages |
-| `assets/videos/` | Bundled exercise demonstration MP4 files |
-
----
-
-## Application Architecture
-
-### Frontend
-
-React 19 with TypeScript. All pages are code-split via `React.lazy` and wrapped in `Suspense` with an `ErrorBoundary` fallback on each route group. Navigation is handled by React Router v8 with a `createBrowserRouter` configuration.
-
-Two layout shells — `DriverLayout` and `AdminLayout` — provide the sidebar navigation and `<Outlet>` for their respective page trees. Route guards redirect unauthenticated or wrong-role users to `/`.
-
-### State Management
-
-Auth state is managed in `AuthContext` (React Context + Provider pattern). All other state is local to each page using `useState` / `useEffect`. There is no global store. Cross-component data sharing happens through `localStorage` and the custom `moove:session-saved` DOM event dispatched at session end.
-
-### Backend
-
-Supabase provides PostgreSQL (with full RLS), Auth (JWT), and the PostgREST API. There is no custom server or API layer — all data access goes through the `@supabase/supabase-js` client in `src/lib/db.ts`. Privileged operations use `SECURITY DEFINER` PostgreSQL functions called via `supabase.rpc()`.
-
-### Data Flow
-
-```
-User action
-  → React component state update
-  → supabase.from(...) or supabase.rpc(...)   [primary]
-  → localStorage.setItem(...)                 [mirror / fallback]
-  → UI re-render
-```
-
-On app load:
-```
-supabase.auth.onAuthStateChange
-  → INITIAL_SESSION / SIGNED_IN
-  → fetchProfile(user.id) from Supabase profiles
-  → Populate AuthContext
-  → Protected routes become accessible
-```
-
-### Routing
-
-```
-/ (LandingPage)
-├── /auth/login
-├── /auth/register
-├── /auth/forgot-password
-├── /driver/* (DriverLayout — requires role: driver)
-│   ├── dashboard
-│   ├── sessions
-│   ├── exercises
-│   ├── ai-recommendations
-│   ├── sedentary
-│   ├── health-dashboard
-│   ├── education
-│   ├── feedback
-│   ├── settings
-│   ├── onboarding
-│   ├── research
-│   └── thinkaloud
-└── /admin/* (AdminLayout — requires role: admin)
-    ├── dashboard
-    ├── participants
-    ├── analytics
-    ├── feedback
-    ├── demo-monitoring
-    ├── settings
-    └── thinkaloud
-```
-
----
-
-## Database Schema
-
-All 21 tables use `uuid_generate_v4()` primary keys and have Row Level Security enabled. The `authenticated` role is granted table-level privileges; policies restrict row access by user ID or admin role.
-
-### Core Tables
-
-| Table | Purpose |
-|---|---|
-| `profiles` | Extends `auth.users`. Stores display name, role, driving goal, height, weight, BMI (generated column), onboarding status, last login. |
-| `user_preferences` | Per-user notification and accessibility settings. One row per user (auto-seeded on profile creation). |
-| `driving_sessions` | One row per driving session. Inserted (partial) at session start; updated with final stats at end. |
-| `exercise_history` | One row per exercise completion. Written immediately when an exercise finishes. Unique dedup index prevents duplicates. |
-| `health_metrics` | Daily health snapshot (pain, energy, stress, posture, wellness score, calories). One row per user per day. |
-| `sedentary_logs` | Records each sedentary risk alert triggered during a session. |
-| `ai_insights` | Stored AI coaching insight records. |
-| `notifications` | Break reminder and system notification records. |
-| `learn_modules` | Health education content. 8 modules pre-seeded. Publicly readable. |
-| `learn_progress` | Tracks which modules each user has started and completed. |
-| `feedback_submissions` | TRL-4 usability survey submissions from drivers. Tagged with study session ID. |
-| `admin_settings` | Key-value store for study configuration. Written via `upsert_admin_setting` RPC. |
-| `exercise_categories` | Exercise taxonomy. Publicly readable. |
-| `exercise_progress` | Cumulative per-user per-exercise stats and streak tracking. |
-| `exercise_recommendations` | Stored exercise recommendation records. |
-| `reminders` | Scheduled reminder records. |
-| `analytics_events` | Client-side event tracking. |
-| `audit_logs` | Admin action audit trail. |
-| `developer_simulations` | Admin-only test data payloads. |
-| `survey_responses` | Granular per-question survey answers. |
-| `research_metrics` | Computed UNLEASH KPI metrics. |
-
-### Database Functions
-
-| Function | Type | Purpose |
-|---|---|---|
-| `handle_new_user()` | Trigger | Auto-creates a `profiles` row on Supabase Auth signup |
-| `handle_new_profile()` | Trigger | Auto-seeds `user_preferences` when a profile is created |
-| `update_updated_at()` | Trigger | Keeps `updated_at` columns current |
-| `get_my_role()` | SECURITY DEFINER | Returns current user's role without triggering RLS recursion |
-| `get_testing_config()` | SQL | Returns testing config JSON |
-| `upsert_admin_setting(p_key, p_val)` | SECURITY DEFINER | Admin-only write to `admin_settings`; enforces role check inside function body |
-
-### Views
-
-| View | Purpose |
-|---|---|
-| `v_weekly_driving_by_user` | Daily session aggregates per user (completed sessions only) |
-| `mv_weekly_exercise_stats` | Materialized: weekly exercise stats per user — requires manual `REFRESH` |
-
----
-
-## Authentication
-
-### Flow
-
-1. User submits credentials on `/auth/login`
-2. `supabase.auth.signInWithPassword` authenticates against Supabase Auth
-3. `onAuthStateChange` fires `SIGNED_IN`; `fetchProfile(uid)` loads the `profiles` row and stamps `last_login_at`
-4. User object stored in `AuthContext` and mirrored to `localStorage`
-5. React Router guards redirect to `/driver/dashboard` or `/admin/dashboard` based on role
-
-### Registration
-
-1. `supabase.auth.signUp` creates the `auth.users` record
-2. `handle_new_user` database trigger automatically creates the `profiles` row
-3. `handle_new_profile` trigger auto-seeds `user_preferences`
-4. User is redirected to the onboarding wizard
-
-### Roles
-
-| Role | Access |
-|---|---|
-| `driver` | All `/driver/*` routes; read-only on shared tables |
-| `admin` | All `/admin/*` routes; read/write on all tables via RLS + `get_my_role()` |
-
-### Demo Accounts
-
-Demo accounts bypass Supabase entirely and use static mock data from `src/data/mockData.ts`.
-
-| Email | Password | Role |
-|---|---|---|
-| `driver@moove.app` | `Driver123!` | driver |
-| `admin@moove.app` | `Admin123!` | admin |
-
----
-
-## Exercise System
-
-### The 10 Exercises
-
-| ID | Name | Body Area | Traffic Safe |
-|---|---|---|---|
-| 1 | Chin Tucks | Neck | Yes |
-| 2 | Upper Trapezius Stretch | Neck & Shoulders | Yes |
-| 3 | Shoulder Rolls | Shoulders & Upper Back | Yes |
-| 4 | Wrist Flexor Stretch | Wrists & Forearms | No |
-| 5 | Seated Figure-4 Glute Stretch | Hips & Glutes | No |
-| 6 | Seated Heel Raise and Toe Raise | Ankles & Feet | Caution |
-| 7 | Standing Hip Flexor & Calf Stretch | Hips & Calves | No |
-| 8 | Standing Side Stretch | Lower Back & Flanks | No |
-| 9 | 20-20-20 Ocular Reset & Eye Blink | Eyes | Caution |
-| 10 | Seated Knee Extension & Quad Squeeze | Knees & Quadriceps | Caution |
-
-Each exercise has a bundled MP4 demonstration video, step-by-step instructions, target muscle descriptions, a "why drivers need it" explanation, configurable sets/duration/rest, and a safety context rating.
-
-### Context Safety Ratings
-
-- `safe` — can be performed while stationary in traffic
-- `caution` — vehicle must be completely stopped and in park
-- `unsafe` — must be performed outside the vehicle or while parked
-
-### Exercise Categories and Completion Logic
-
-**Before Driving (Warm-Up):** All exercises with `contexts.before === 'safe'`. Each exercise has its own independent completion state. Completed exercises show a green "Done" badge; the "Do It" button is disabled for the remainder of the session.
-
-**Movement Breaks (mid-drive):** Recommends traffic-safe exercises first; falls back to parked-only when all traffic exercises are completed for the session.
-
-**After Driving (Cool-Down):** All exercises with `contexts.after === 'safe'`. Same independent per-exercise completion logic as Warm-Up.
-
-When all exercises in a category are done, a success banner appears: "Great job! You have completed all Warm-Up / Cool-Down exercises."
-
-### Completion Persistence
-
-- Completion state stored in `completedBeforeIds` / `completedBreakIds` / `completedAfterIds` (React `Set` state)
-- Persisted to `moove_active_session` localStorage across page navigations
-- Each completion immediately written to Supabase `exercise_history` with the current `session_id`
-- Unique index `(user_id, session_id, exercise_id, context)` prevents duplicate submissions
-
-### Recommendation Algorithm
-
-1. Filters exercises by context (traffic vs. parked safety rating)
-2. Excludes all exercises already completed this session
-3. Prefers exercises matching the user's tired body areas from onboarding
-4. Avoids repeating the most recently used exercise
-5. Returns `null` (no recommendation) when all eligible exercises are exhausted — never falls back to completed exercises
-
----
-
-## Driving Session
-
-### Lifecycle
-
-```
-1. Tap "Start Driving"
-   → createDrivingSession() inserts partial row (ended_at = null)
-   → Session UUID stored in state + localStorage
-
-2. Per-second interval
-   → sessionSeconds++, sedentarySeconds++
-   → getSedentaryRisk() updates risk indicator
-
-3. At reminder interval (15 / 30 / 45 / 60 min, user-configured)
-   → triggerBreakReminder() fires notification (popup / sound / vibration / silent)
-   → Exercise recommendation modal appears
-
-4. User completes an exercise
-   → recordExerciseCompletion() writes to exercise_history immediately
-   → completedBreakIds updated; recommendation engine excludes this exercise
-
-5. Tap "End Session"
-   → saveSessionToSupabase() UPDATEs the existing row with final stats
-   → Health metrics upserted for today
-   → Session saved to moove_session_history localStorage
-   → moove:session-saved event dispatched (Dashboard listens)
-   → activeDbSessionId cleared
-```
-
-### Sedentary Risk Levels
-
-| Level | Threshold | Color |
-|---|---|---|
-| Low | 0–30 min | Green |
-| Moderate | 31–60 min | Amber |
-| High | 61–90 min | Orange |
-| Very High | >90 min | Red |
-
-### Session View State Machine
-
-`main` → `before_driving` → `exercise_preview` → `rep_select` → `exercise_active` → `exercise_complete` → `main` → `cooldown_prompt` → `after_driving` → `session_processing` → `session_summary`
-
----
-
-## AI Recommendation Engine
-
-The "Moo" engine (`AIRecommendations.tsx`) is a **client-side rule engine** — no external AI API is used. All logic runs in the browser using session history from localStorage and onboarding preferences.
-
-### Insight Types
-
-| # | Insight | Trigger |
-|---|---|---|
-| 1 | Weekly Behavioral Summary | Always shown |
-| 2 | Today's Personalized Recommendation | Based on today's driving accumulation |
-| 3 | Streak & Encouragement | ≥3-day streak or 0-session reconnect |
-| 4 | Tired Area Insight | Maps onboarding body area to a specific exercise |
-| 5 | Long-Session Safety Insight | Users logging 5+ hours/day |
-| 6 | Time-of-Day Tip | Early morning, midday, evening, or late-night |
-| 7 | Exercise Variety Nudge | Repetitive exercise selection detected |
-| 8 | 30-Day Milestone | On reaching 30 completed sessions |
-
-### Body Area → Exercise Mapping
-
-| Tired Area | Recommended Exercises |
-|---|---|
-| Neck | Chin Tucks, Upper Trapezius Stretch |
-| Shoulders | Shoulder Rolls, Upper Trapezius Stretch |
-| Upper Back | Shoulder Rolls, 20-20-20 Eye Reset |
-| Lower Back | Seated Figure-4 Glute Stretch, 20-20-20 Eye Reset |
-| Hips | Seated Figure-4 Glute Stretch, Standing Hip Flexor Stretch |
-| Knees | Quad Squeeze, Standing Hip Flexor Stretch |
-| Calves / Ankles | Heel Raise and Toe Raise |
-| Wrists | Wrist Flexor Stretch |
-| Eyes | 20-20-20 Ocular Reset |
-
----
-
-## Admin Portal
-
-Accessible to users with `role: admin`. Demo admin uses static mock data.
-
-| Page | Path | Purpose |
-|---|---|---|
-| Dashboard | `/admin/dashboard` | Aggregated KPIs: avg ratings, would-use-again %, bug-free rate, feature mentions |
-| Participants | `/admin/participants` | Live list of driver profiles from Supabase |
-| Analytics | `/admin/analytics` | Time-series: sessions/day, exercises/day, DAU |
-| Feedback | `/admin/feedback` | All `feedback_submissions` rows with rating distributions |
-| Demo Monitoring | `/admin/demo-monitoring` | Real-time session monitoring during live showcase events |
-| Settings | `/admin/settings` | Study config (quota, phase, thresholds) + Testing session config |
-| Think-Aloud | `/admin/thinkaloud` | Aggregated think-aloud responses from all participants |
-
----
-
-## Research Tools
-
-MOOVE includes structured research instruments for the UNLEASH-2026 TRL-4 evaluation.
-
-### ResearchDashboard (`/driver/research`)
-
-Displays 11 KPIs across three UNLEASH dimensions:
-
-- **Desirability:** Usability satisfaction, perceived usefulness, feature adoption, user retention intent
-- **Feasibility:** Technical reliability, exercise completion rate, session completion rate, data accuracy
-- **Viability:** Would-use-again rate, would-recommend rate, willingness to pay (future)
-
-### ThinkAloud (`/driver/thinkaloud`)
-
-10-question structured think-aloud protocol with per-question response timer. Responses saved to `moove_thinkaloud_responses` localStorage and viewable in AdminThinkAloud.
-
-### FeedbackValidation (`/driver/feedback`)
-
-4-step TRL-4 usability survey covering ratings, usability metrics, bug experience, and open-ended feedback. Each submission is tagged with the current `testing_session_id` and `prototype_version` from `admin_settings`.
-
----
-
-## Installation
-
-### Prerequisites
-
-- Node.js 20+ (managed via [mise](https://mise.jdx.dev/))
-- pnpm 9+
-- A [Supabase](https://supabase.com/) project
-
-### Steps
-
-```bash
-# 1. Clone the repository
-git clone <repository-url>
-cd moove
-
-# 2. Install dependencies
-pnpm install
-
-# 3. Configure environment variables
-cp .env.example .env
-# Edit .env with your Supabase URL and publishable key
-
-# 4. Apply the database schema
-# Open your Supabase project → SQL Editor
-# Paste and run the full contents of: src/lib/migrations.sql
-
-# 5. Start the development server
-pnpm dev
-```
-
-The app will be available at `http://localhost:8443` (or the port in `$PORT`).
-
-> **If you see `permission denied for table admin_settings` errors**, run `src/lib/hotfix_admin_settings_permissions.sql` in the Supabase SQL editor as well.
-
----
-
-## Environment Variables
-
-```env
-# Required — your Supabase project credentials
-VITE_SUPABASE_URL=https://your-project.supabase.co
-VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_your_key_here
-
-# Optional — set automatically by the Figma Make platform
-PORT=8443
-FIGMA_PUBLIC_URL=
-```
-
-| Variable | Description |
-|---|---|
-| `VITE_SUPABASE_URL` | Supabase project URL (Project Settings → API) |
-| `VITE_SUPABASE_PUBLISHABLE_KEY` | Supabase anon/publishable key — safe to include in client builds |
-| `PORT` | Dev server port. Defaults to `8443`. |
-| `FIGMA_PUBLIC_URL` | Base URL prefix injected by Figma Make at deploy time |
-
-> **Never expose your Supabase service-role key.** Only the publishable (anon) key is used in this application.
-
----
-
-## Available Scripts
-
-```bash
-pnpm dev        # Start the Vite development server with hot reload
-pnpm build      # Production build — outputs to dist/
-pnpm preview    # Serve the production build locally for verification
-pnpm format     # Format all source files with oxfmt
-```
-
----
+- Exercise context matrix: `traffic`, `parked`, `before`, and `after` ratings of `safe`, `caution`, or `unsafe`.
+- Browser notifications degrade safely when the Notification, Audio, or Vibration API is unavailable.
+- An error boundary supplies recovery and home actions for unexpected UI errors.
+- Pages are route-level lazy loaded with a loading state.
 
 ## Screenshots
 
-| Screen | Description |
-|---|---|
-| Landing Page | Marketing hero with MOOVE mascot "Moo" |
-| Driver Dashboard | Stat cards, weekly activity chart, achievement badges |
-| Driving Session | Live session timer, sedentary risk level, exercise prompts |
-| Before Driving Warm-Up | Exercise list with per-exercise completion tracking |
-| Exercise Player | Video demo, timed sets/rest phases, audio cues |
-| After Driving Cool-Down | Independent per-exercise completion, success banner |
-| AI Recommendations | Personalized "Moo" coaching cards |
-| Health Dashboard | Wellness trend charts and daily health metrics |
-| Exercise Library | Full catalog with video previews and category filters |
-| Admin Dashboard | Aggregated research KPIs from all participants |
+Add project screenshots to a `docs/screenshots/` directory and replace these placeholders when they are available.
 
----
+| Screen | Placeholder |
+| --- | --- |
+| Landing page | `docs/screenshots/landing-page.png` |
+| Login and registration | `docs/screenshots/authentication.png` |
+| Driver dashboard | `docs/screenshots/driver-dashboard.png` |
+| Driving session | `docs/screenshots/driving-session.png` |
+| Exercise library | `docs/screenshots/exercise-library.png` |
+| Preventive health dashboard | `docs/screenshots/health-dashboard.png` |
+| AI insights | `docs/screenshots/ai-insights.png` |
+| Research admin dashboard | `docs/screenshots/admin-dashboard.png` |
 
-## Known Limitations
+## Technology stack
 
-- **No real-time sync:** Dashboard statistics update on page reload or after a session ends via a custom DOM event. Supabase Realtime subscriptions are not implemented.
-- **Client-side AI only:** The "AI" engine is a deterministic rule engine. Insights are pattern-matched, not generated by an LLM.
-- **localStorage dependency:** Offline reliability depends on `localStorage`. Clearing browser storage loses session history for demo users.
-- **No avatar upload:** The `avatar_url` field exists in the schema and user model but file upload to Supabase Storage is not implemented.
-- **Email delivery not guaranteed:** Password reset requires Supabase SMTP configuration; the UI flow exists but will silently fail without it.
-- **Materialized view refresh:** `mv_weekly_exercise_stats` must be refreshed manually or via a Supabase scheduled function — it is not refreshed automatically.
-- **10 exercises only:** The exercise library is fixed at 10 exercises. Adding new ones requires changes to `exercises.ts`, a new video asset, and an updated `exerciseVideos.ts` mapping.
-- **English only:** The UI is English-only. The `preferred_language` field exists in `user_preferences` but multi-language support is not implemented.
+| Category | Technology |
+| --- | --- |
+| Frontend | React 19, React DOM 19, TypeScript 5.7, React Router 8.3 |
+| Styling | Tailwind CSS 4 via `@tailwindcss/vite` |
+| Build and development | Vite 8, Node.js 22, pnpm 10.34.3, oxfmt 0.2 |
+| Backend/API | Vercel serverless function at `api/ai/wellness-summary.ts`; an included Hono/Deno Supabase function scaffold for Figma Make data |
+| Database and auth | Supabase (`@supabase/supabase-js` 2.112), Supabase Auth, PostgreSQL, Row Level Security |
+| AI | Groq OpenAI-compatible Chat Completions API; default model `llama-3.3-70b-versatile` |
+| Browser capabilities | Notifications API, Web Audio API, Vibration API, Supabase Realtime |
+| Deployment | Vercel SPA rewrite configuration; Figma Make-compatible Vite configuration |
 
----
+## Architecture
 
-## Future Improvements
+```mermaid
+flowchart LR
+  D[Driver browser] --> R[React + Vite application]
+  A[Admin browser] --> R
+  R -->|Auth, data, Realtime| S[Supabase Auth + PostgreSQL]
+  R -->|POST weekly aggregates| V[Vercel wellness endpoint]
+  V -->|server-only key, optional| G[Groq API]
+  V -->|provider unavailable/no key| F[Safety-focused fallback summary]
+  S --> P[Profiles, sessions, exercise history]
+  S --> X[Feedback, preferences, admin settings]
+```
 
-- Supabase Realtime subscriptions for live admin monitoring and dashboard auto-refresh
-- Web Push API for background break reminders when the app is not in focus
-- Expanded exercise library with additional exercises and categories
-- Dynamic AI insights powered by Claude API using session history as context
-- Supabase Storage integration for avatar and profile photo uploads
-- Multi-language support (Filipino / Tagalog as primary addition)
-- Full accessibility mode (high contrast, scalable font, screen reader optimization)
-- Offline-first architecture with Service Worker and background sync
-- Research data export (CSV / PDF from the admin portal)
-- Gamification: leaderboard, community challenges, extended achievement system
-- Wearable device integration for passive sedentary detection
+The browser creates a singleton Supabase client only when `VITE_SUPABASE_URL` and an anon/publishable key are supplied. It uses a dedicated `moove-auth-token` storage key so Figma Make's client is not reused. Core session and onboarding helpers use Supabase first. The app deliberately includes demo accounts, mock data, and browser-local fallback paths so it can be explored without a configured backend; those fallbacks are not a multi-device source of truth.
 
----
+The Vercel API route accepts aggregate weekly values only. It validates non-negative numeric inputs, limits generation to 150 tokens, applies a nine-second timeout, and returns a preventive-language fallback summary on failure.
 
-## Contributing
+## Database design
 
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/your-feature-name`
-3. Make your changes following the existing code conventions
-4. Format your code: `pnpm format`
-5. Commit: `git commit -m "feat: description"`
-6. Push: `git push origin feature/your-feature-name`
-7. Open a Pull Request against `main`
+### Runtime data model
 
-### Code Conventions
+The active React data layer currently queries the following core tables. The base migration also contains additional legacy/research tables; see [Schema notes](#schema-notes) before relying on them.
 
-- TypeScript — no `any` types; prefer explicit interfaces
-- Tailwind CSS v4 utility classes only; avoid inline styles except for dynamic values
-- Default exports for all page and layout components
-- Double quotes for strings containing apostrophes (`"We're here"`)
-- All DB calls must guard against demo user IDs: `if (userId === 'demo' || userId === 'admin-demo') return`
-- No comments unless the reason (not the what) is non-obvious
+```mermaid
+erDiagram
+  AUTH_USERS ||--|| PROFILES : creates
+  PROFILES ||--o| DRIVER_PROFILES : configures
+  PROFILES ||--o| USER_PREFERENCES : sets
+  PROFILES ||--o{ DRIVING_SESSIONS : owns
+  DRIVING_SESSIONS ||--o{ SESSION_EVENTS : records
+  DRIVING_SESSIONS ||--o{ EXERCISE_HISTORY : includes
+  PROFILES ||--o{ HEALTH_METRICS : records
+  PROFILES ||--o{ FEEDBACK_SUBMISSIONS : submits
+  ADMIN_SETTINGS }o--|| PROFILES : "admin RPC authorizes"
+```
 
----
+| Table/view | Key relationships and purpose |
+| --- | --- |
+| `profiles` | Primary key `id` references `auth.users(id)`; stores driver/admin role, user profile fields, onboarding state, and login timestamp. |
+| `driver_profiles` | `user_id` is both primary key and foreign key to `profiles`; normalizes driver type, schedule, problem areas, and reminders. |
+| `user_preferences` | Per-user preferences keyed by `user_id`; stores reminder and notification settings. |
+| `driving_sessions` | UUID primary key; `user_id` references the profile. Stores lifecycle status, timing, reminders, exercise totals, score, calories, notes, and optional AI summary. |
+| `session_events` | Append-only event timeline linked to both a session and user profile, with an event type, elapsed seconds, timestamp, and JSON payload. |
+| `exercise_history` | Links a user and optional session to a catalog exercise ID and completion/skip details. A partial unique index prevents duplicate `(user, session, exercise, context)` history rows. |
+| `health_metrics` | Per-user recorded wellness, stress, posture, and calorie fields. |
+| `feedback_submissions` | Authenticated user feedback, test metadata, ratings, open responses, bug report, device/browser, and submission time. |
+| `admin_settings` | Key/value settings for shared testing configuration; writes happen through `upsert_admin_setting`. |
+| `driver_daily_metrics` | Security-invoker view derived from completed `driving_sessions`, grouped by user and date. |
+
+### Security model
+
+- A database trigger creates each new user's `profiles` row with the `driver` role; browser sign-up metadata cannot promote a role.
+- `prevent_role_change` blocks client role escalation, and `is_admin()` is a security-definer authorization helper used by policies and the settings RPC.
+- RLS limits normal users to their own profiles, sessions, exercise history, session events, driver profile, and feedback. Administrators can read permitted cross-user records.
+- Administrator setting writes are authorized in the `upsert_admin_setting` database function, not merely hidden by the client UI.
+- Indexes support user/session and admin-report queries. The Realtime migration adds `driving_sessions` to Supabase Realtime.
+
+### Schema notes
+
+`src/lib/migrations.sql` is the historical base schema. It defines additional tables such as `sedentary_logs`, `ai_insights`, `notifications`, learning, recommendation, analytics, survey, research, audit, and developer-simulation tables. The current React code does **not** query most of those tables. Keep or retire them only after checking any deployed service dependencies. `DATABASE_AUDIT.md` documents this distinction.
+
+## Project structure
+
+```text
+MOOVE/
+├── api/ai/wellness-summary.ts        # Vercel Groq/fallback wellness endpoint
+├── src/
+│   ├── assets/videos/                # Bundled exercise videos
+│   ├── components/                   # Error boundary and reusable video player
+│   ├── context/AuthContext.tsx       # Auth, demo accounts, local fallback
+│   ├── data/                         # Exercise catalog, videos, mock data
+│   ├── imports/                      # Logos, mascot, profiles, source media, reference notes
+│   ├── layouts/                      # Protected driver and admin shells
+│   ├── lib/                          # Supabase singleton, persistence helpers, base SQL
+│   ├── pages/
+│   │   ├── admin/                    # Research/admin routes
+│   │   ├── auth/                     # Login, register, forgot password
+│   │   └── driver/                   # Driver wellness and research-testing routes
+│   ├── services/                     # Analytics, notifications, AI API client
+│   ├── App.tsx                       # Error and auth providers
+│   ├── index.css                     # Tailwind entry point and global theme
+│   ├── main.tsx                      # React mount
+│   └── routes.tsx                    # Lazy-loaded route map
+├── supabase/
+│   ├── functions/server/             # Figma Make Hono/KV function scaffold
+│   └── migrations/                   # Security, SSOT, and Realtime migrations
+├── utils/supabase/info.tsx           # Figma Make Supabase compatibility exports
+├── .env.example                      # Development environment template
+├── .env.production.example           # Production environment template
+├── DATABASE_AUDIT.md                 # Database implementation and rollout audit
+├── SUPABASE_SSOT_HANDOFF.md          # Supabase-first rollout guidance
+├── package.json                      # Scripts and package versions
+├── vite.config.ts                    # Vite, Tailwind, Figma Make, and server settings
+└── vercel.json                       # SPA rewrite
+```
+
+The `src/imports/pasted_text/` files are project/reference notes imported with the design workspace; they are not runtime modules. `dist/` and `node_modules/` are generated directories and should not be treated as source.
+
+## Installation and local development
+
+### Prerequisites
+
+- Git
+- Node.js **22** (declared in `.mise.toml`)
+- pnpm **10.34.3** or npm (both lockfiles are present)
+- A Supabase project for persistent auth/data
+- A Groq API key only if you want provider-generated weekly summaries
+
+### Clone and install
+
+```bash
+git clone <repository-url>
+cd MOOVE
+npm install
+```
+
+You may use `pnpm install` instead if your team standardizes on the included `pnpm-lock.yaml`.
+
+### Configure the environment
+
+Copy `.env.example` to `.env` and populate values for your Supabase project. Never commit a populated `.env` file.
+
+| Variable | Required | Example | Purpose |
+| --- | --- | --- | --- |
+| `VITE_SUPABASE_URL` | Yes for Supabase | `https://your-project.supabase.co` | Browser Supabase project URL. |
+| `VITE_SUPABASE_ANON_KEY` | Yes for Supabase | `eyJ...` | Browser-safe publishable/anon key protected by RLS. `VITE_SUPABASE_PUBLISHABLE_KEY` is supported temporarily as a compatibility fallback. |
+| `VITE_APP_NAME` | No | `MOOVE` | Public app label/configuration. |
+| `VITE_APP_ENV` | No | `development` | Public environment label. |
+| `VITE_API_BASE_URL` | No | empty for same origin | Prefix for `/api/ai/wellness-summary`; leave blank for Vercel same-origin deployment. |
+| `GROQ_API_KEY` | No | `gsk_...` | **Server-only** key used by the Vercel wellness endpoint. Do not prefix it with `VITE_`. |
+| `GROQ_MODEL` | No | `llama-3.3-70b-versatile` | Optional Groq model override. |
+| `NODE_ENV` | No | `development` | Node/server environment. |
+| `PORT` | No | `8443` | Vite dev/preview port; Vite defaults to 8443 in this project. |
+
+Without Supabase configuration, the application still exposes the local/demo experience. Password-reset delivery and persistent cross-device data require Supabase.
+
+### Set up Supabase
+
+1. Create a Supabase project and obtain its Project URL and anon/publishable key.
+2. Configure these values in `.env` using the table above.
+3. Back up any existing project database before applying migrations.
+4. In the Supabase SQL Editor (or via your migration workflow), apply migrations in this order:
+
+   ```text
+   src/lib/migrations.sql
+   supabase/migrations/20260805_security_and_data_integrity.sql
+   supabase/migrations/20260805_ssot_sessions_and_onboarding.sql
+   supabase/migrations/20260805_enable_driving_sessions_realtime.sql
+   ```
+
+5. Review the administrator promotion statement in the security/SSOT migration, then promote only a reviewed account. The repository targets `admin@moove.app` in the included SQL.
+6. In Supabase Auth, configure the site's redirect URL so the password-reset path resolves at `<your-origin>/auth/reset-password`. Note that this route is not presently defined in `routes.tsx`; add it before treating password reset completion as production ready.
+7. Test sign-up, onboarding persistence, session creation/completion, feedback submission, an admin settings write, and a non-admin access attempt.
+
+The migrations are additive and intended to preserve existing data. See `SUPABASE_SSOT_HANDOFF.md` and `DATABASE_AUDIT.md` for rollout cautions; do not modify existing migrations merely to run the setup.
+
+### Run the application
+
+```bash
+npm run dev
+```
+
+This starts Vite on `http://localhost:8443` by default (`--host 0.0.0.0`). There is no `server` or `dev:full` script in this repository: the frontend runs through Vite, Supabase is external, and the AI endpoint is deployed as a Vercel serverless function.
+
+Useful additional commands:
+
+```bash
+npm run build     # creates the production bundle in dist/
+npm run preview   # serves the built bundle on PORT or 8443
+npm run format    # runs oxfmt
+```
+
+### Demo accounts
+
+These accounts are hard-coded for local exploration and do not authenticate against Supabase:
+
+| Role | Email | Password |
+| --- | --- | --- |
+| Driver demo | `driver@moove.app` | `Driver123!` |
+| Research admin demo | `admin@moove.app` | `Admin123!` |
+
+Do not use these credentials as production accounts.
+
+## AI integration
+
+The client sends weekly aggregate activity data—driving minutes, completed exercises/sessions, exercise completion rate, and optional tired areas—to `POST /api/ai/wellness-summary`. The Vercel function validates the payload and, if `GROQ_API_KEY` is available, calls Groq's OpenAI-compatible chat-completions endpoint. Its system prompt constrains the output to a concise preventive wellness summary: no diagnosis, prescription, medical outcome claim, or advice to exercise while driving.
+
+The endpoint returns `{ summary, source }`, where `source` is `groq` or `fallback`. A fallback means the client can remain usable without an AI credential or during provider failure. In-browser recommendations use deterministic session and preference logic; they do not send a full personal profile to Groq.
+
+## Authentication and access control
+
+```mermaid
+flowchart TD
+  L[Login/Register] --> SA[Supabase Auth]
+  SA --> T[auth.users trigger creates profiles row]
+  T --> P[Load profile and role]
+  P -->|driver| D[/driver routes]
+  P -->|admin| A[/admin routes]
+  D --> O{Onboarding complete?}
+  O -->|No| ON[Onboarding]
+  O -->|Yes| DD[Driver dashboard]
+```
+
+- `AuthProvider` restores a Supabase session, listens for auth-state changes, and loads the matching profile.
+- Driver and admin layouts redirect unauthenticated visitors to `/auth/login`; `AdminLayout` redirects non-admins to the driver dashboard.
+- Drivers who have not completed onboarding are redirected to `/driver/onboarding`, except for the explicit demo and admin accounts.
+- Supabase database role—not browser-controlled sign-up metadata—determines persistent administrator access.
+- A local account store exists as a no-Supabase fallback. It is suitable for prototype/demo use only, not secure production authentication.
+
+## Performance and reliability
+
+- Every route page is loaded with `React.lazy` and `Suspense`.
+- Supabase client construction is cached on `globalThis` across Vite HMR updates.
+- Session, exercise, and feedback queries have indexes added by the security migration; the analytics service restricts history reads and session queries use limits.
+- Realtime refresh is scoped to a driver's weekly completed sessions.
+- Browser feature use is capability-checked and failure-tolerant.
+
+## Deployment
+
+The application is configured for Vercel. `vercel.json` rewrites all unknown routes to `index.html`, allowing React Router browser routes to load directly. Vercel automatically recognizes `api/ai/wellness-summary.ts` as a serverless API function.
+
+1. Import the repository into Vercel.
+2. Set `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, and any public API base URL in the Vercel project environment.
+3. Set `GROQ_API_KEY` and optionally `GROQ_MODEL` as server-only environment variables.
+4. Use build command `npm run build`; the output directory is `dist`.
+5. Add the deployed origin to Supabase Auth redirect/allowed URL configuration.
+
+## Troubleshooting
+
+| Symptom | Checks |
+| --- | --- |
+| Blank screen or error view | Open browser devtools, confirm `.env` values are present at build time, and run `npm run build` to identify TypeScript/Vite errors. |
+| Supabase requests fail | Verify project URL/key, project status, migration order, authenticated session, table grants, and RLS policies. The migrations must be applied before core writes. |
+| Admin settings denied | Confirm the user has a `profiles.role` of `admin`, is signed in through Supabase rather than a demo session, and the latest `upsert_admin_setting` function is installed. |
+| AI response is fallback | This is expected when `GROQ_API_KEY` is absent or Groq times out/fails. Check that the key is set only on the server and that `VITE_API_BASE_URL` points to the deployment if it is cross-origin. |
+| Password reset link does not complete | Configure Supabase redirect URLs and add the currently missing `/auth/reset-password` route before production use. |
+| Browser reminders do not appear | Check browser notification permissions, HTTPS/browser policy, enabled notification preferences, and whether the selected reminder style is silent. |
+
+## Recommended developer workflow
+
+1. Pull the latest changes and install dependencies.
+2. Copy/configure the environment template.
+3. Apply the SQL migrations to a Supabase staging project in the documented order.
+4. Start `npm run dev` and test both a real Supabase account and the demo accounts.
+5. Verify driver onboarding, session lifecycle, feedback, and admin authorization.
+6. Run `npm run build` before deployment.
+
+## Future improvements
+
+- Move remaining local-browser research artifacts (feedback action plans, iterations, think-aloud responses, and legacy dashboard readers) into authenticated normalized Supabase tables.
+- Add the missing password-reset completion route and integration tests for the full authentication flow.
+- Replace browser aggregate loops with paginated RPCs/views for larger study cohorts.
+- Add automated tests for session recovery, RLS ownership/admin boundaries, duplicate event handling, and multiple tabs.
+- Require authentication/authorization at the wellness endpoint before sending any user-linked aggregate data.
+- Add a documented, user-approved local-data export/import migration path.
+
+## Contributors
+
+The landing page identifies Anne Carol Jonson and Jean Abrey Serva as the people behind MOOVE. Add contributors here as the project grows:
+
+- Anne Carol Jonson
+- Jean Abrey Serva
+- Contributors: please open an issue or pull request with a clear description and validation steps.
 
 ## License
 
-This project does not currently have a defined open-source license. All rights reserved by the MOOVE development team. For research and evaluation use only during the UNLEASH-2026 study period.
-
----
+No `LICENSE` file is currently included in this repository. Treat the project as **all rights reserved/proprietary until the maintainers add an explicit license**.
 
 ## Acknowledgements
 
-- [React](https://react.dev/) — UI framework
-- [Vite](https://vitejs.dev/) — build tooling
-- [Tailwind CSS](https://tailwindcss.com/) — utility-first styling
-- [Supabase](https://supabase.com/) — backend, database, and authentication
-- [React Router](https://reactrouter.com/) — client-side routing
-- [TypeScript](https://www.typescriptlang.org/) — type safety
-- [oxfmt](https://github.com/nicolo-ribaudo/oxfmt) — code formatting
-- [Figma Make](https://www.figma.com/) — deployment platform
-- WHO physical activity and sedentary behaviour guidelines — basis for risk thresholds
-- Filipino driver health research literature — basis for exercise selection and session structure
-
----
-
-> **MOOVE** · v0.49-TRL4 · UNLEASH-2026 · Built for Filipino drivers
+Built with React, Vite, Tailwind CSS, React Router, Supabase, Vercel, Groq, and the browser platform APIs used for notifications, audio, and vibration. The exercise media and MOOVE logo/mascot assets are included in the repository.
