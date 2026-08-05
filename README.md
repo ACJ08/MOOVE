@@ -301,7 +301,7 @@ flowchart TD
     D --> O{Onboarding Complete?}
     O -->|No| ON[Onboarding Flow]
     O -->|Yes| DD[Driver Dashboard]
-
+```
 - `AuthProvider` restores a Supabase session, listens for auth-state changes, and loads the matching profile.
 - Driver and admin layouts redirect unauthenticated visitors to `/auth/login`; `AdminLayout` redirects non-admins to the driver dashboard.
 - Drivers who have not completed onboarding are redirected to `/driver/onboarding`, except for the explicit demo and admin accounts.
