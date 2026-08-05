@@ -1,5 +1,5 @@
 import { useRef, useState, useEffect } from 'react'
-import defaultVideoSrc from '@/imports/Chin_Tucks_Sample.mp4'
+import defaultVideoSrc from '@/assets/videos/Chin_Tucks.mp4'
 
 interface ExerciseVideoProps {
   exerciseEmoji?: string
@@ -10,7 +10,7 @@ interface ExerciseVideoProps {
 }
 
 // Reusable video player for exercise demonstrations.
-// Pass `src` to use a per-exercise video; falls back to Chin_Tucks_Sample.mp4.
+// Pass `src` to use a per-exercise video; falls back to the bundled Chin Tucks video.
 // Always autoplays muted, loops, and restarts when src changes.
 export default function ExerciseVideo({ exerciseEmoji = '🧘', playing = true, className = '', src }: ExerciseVideoProps) {
   const videoRef = useRef<HTMLVideoElement>(null)

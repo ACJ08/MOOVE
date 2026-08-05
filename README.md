@@ -318,13 +318,20 @@ flowchart TD
 
 ## Deployment
 
-The application is configured for Vercel. `vercel.json` rewrites all unknown routes to `index.html`, allowing React Router browser routes to load directly. Vercel automatically recognizes `api/ai/wellness-summary.ts` as a serverless API function.
+The application is configured for Vercel. `vercel.json` explicitly uses the Vite build command and `dist` output directory, then rewrites unknown routes to `index.html` so React Router browser routes load directly. Hashed assets in `src/assets` and direct Vite imports from `src/imports` are emitted to `dist/assets`; do not replace these imports with manually constructed `/src/...` URLs. Vercel automatically recognizes `api/ai/wellness-summary.ts` as a serverless API function.
+
+### Required Git LFS setting
+
+The MOOVE logo, mascot, profile photos, and exercise videos are tracked with Git LFS. In Vercel, open **Project Settings → Git** and enable **Git LFS**, then redeploy. Without this setting Vercel checks out small LFS pointer files instead of the real binary files; Vite can still complete the build, but browsers receive invalid image/video responses. The `prebuild` verifier now catches that condition and fails the deployment with a clear message.
+
+Keep the current split for the bundled MVP: branding images and the ten short exercise videos are Vite imports, giving each file a hashed production URL and case-safe filename. The project currently ships roughly 87 MB of exercise video. Before the library expands or videos become higher resolution, move videos to a public `exercise-media` Supabase Storage bucket (for example, `exercise-videos/chin-tucks.mp4`) or a media CDN. Store the object path in exercise data and generate public or signed URLs with `supabase.storage.from('exercise-media').getPublicUrl(path)`; keep logo and mascot imports in the app bundle.
 
 1. Import the repository into Vercel.
-2. Set `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, and any public API base URL in the Vercel project environment.
-3. Set `GROQ_API_KEY` and optionally `GROQ_MODEL` as server-only environment variables.
-4. Use build command `npm run build`; the output directory is `dist`.
-5. Add the deployed origin to Supabase Auth redirect/allowed URL configuration.
+2. In **Settings → Git**, enable **Git LFS** and redeploy if it was previously disabled.
+3. Set `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, and any public API base URL in the Vercel project environment.
+4. Set `GROQ_API_KEY` and optionally `GROQ_MODEL` as server-only environment variables.
+5. Use build command `npm run build`; the output directory is `dist`.
+6. Add the deployed origin to Supabase Auth redirect/allowed URL configuration.
 
 ## Troubleshooting
 
