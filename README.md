@@ -291,15 +291,16 @@ The endpoint returns `{ summary, source }`, where `source` is `groq` or `fallbac
 
 ```mermaid
 flowchart TD
-  L[Login/Register] --> SA[Supabase Auth]
-  SA --> T[auth.users trigger creates profiles row]
-  T --> P[Load profile and role]
-  P -->|driver| D[/driver routes]
-  P -->|admin| A[/admin routes]
-  D --> O{Onboarding complete?}
-  O -->|No| ON[Onboarding]
-  O -->|Yes| DD[Driver dashboard]
-```
+    L[Login/Register] --> SA[Supabase Auth]
+    SA --> T[Auth trigger creates profile record]
+    T --> P[Load user profile and role]
+
+    P -->|Driver| D[Driver Routes]
+    P -->|Admin| A[Admin Routes]
+
+    D --> O{Onboarding Complete?}
+    O -->|No| ON[Onboarding Flow]
+    O -->|Yes| DD[Driver Dashboard]
 
 - `AuthProvider` restores a Supabase session, listens for auth-state changes, and loads the matching profile.
 - Driver and admin layouts redirect unauthenticated visitors to `/auth/login`; `AdminLayout` redirects non-admins to the driver dashboard.
