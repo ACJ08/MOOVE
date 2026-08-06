@@ -317,7 +317,7 @@ These accounts are hard-coded for local exploration and do not authenticate agai
 | Role | Email | Password |
 | --- | --- | --- |
 | Driver demo | `driver@moove.app` | `Driver123!` |
-| Research admin demo | `admin@moove.app` | `Admin123!` |
+| Administrator demo (Admin portal) | `admin@moove.app` | `Admin123!` |
 
 Do not use these credentials as production accounts.
 
