@@ -16,11 +16,13 @@ Long periods behind the wheel can make it difficult for drivers to notice or act
 
 The application guides a driver through onboarding, an optional pre-drive warm-up, an active session with configurable break reminders, and a post-session summary. It records completed sessions and exercise history in Supabase when configured, and surfaces personal activity, sedentary time, wellness engagement, and recommendations. Researchers and administrators have separate routes for participant, session, feedback, and testing configuration review.
 
-## Problem statement
+## Finalized problem statement
 
-Drivers can experience prolonged static sitting, repetitive steering and pedal work, constrained posture, and limited opportunities to take a restorative break. These conditions can contribute to musculoskeletal discomfort and fatigue, while a conventional exercise program may not fit intermittent or extended work shifts. Preventive tools also need to respect a critical constraint: a wellness suggestion must never distract someone from driving.
+> Licensed drivers across the Philippines who regularly experience prolonged vehicle-based sedentary periods during their daily driving routines need preventive health opportunities that can be integrated naturally into their everyday driving experiences because current preventive health interventions are primarily designed for dedicated exercise, workplace wellness programs, or clinical settings rather than the real-world constraints of prolonged driving, leaving drivers with limited opportunities to practice preventive health behaviors during one of the most sedentary and recurring parts of their daily lives.
 
-MOOVE addresses this gap with brief, context-aware micro-movements and behavioral feedback. Rather than presenting a clinical diagnosis or requiring a long workout, it helps drivers track time in a session, recognize increasing sedentary exposure, and select exercises appropriate to traffic, a parked vehicle, before driving, or after driving. The research modules support structured feedback and think-aloud testing so the experience can be evaluated and improved.
+## Target beneficiary group
+
+MOOVE is designed for licensed drivers in the Philippines whose daily routine includes extended or repeated vehicle use: private-car, ride-hailing, taxi, delivery, truck, bus, and van drivers. The primary audience is adults who can safely use the application before driving, while parked, or after driving. It is preventive-wellness support, not a diagnostic, treatment, or emergency service.
 
 ## Proposed solution
 
@@ -33,7 +35,16 @@ MOOVE combines the following implemented elements:
 - Supabase-backed storage for profiles, preferences, driving sessions, exercise history, health metrics, feedback, administrator settings, onboarding profiles, and session events.
 - An optional server-side Groq-powered weekly wellness summary with a deterministic safety-focused fallback when no API key is present or the provider is unavailable.
 
-## Key features
+## Application workflow
+
+1. A driver registers or signs in, then completes onboarding with driving-routine, problem-area, reminder, and notification preferences.
+2. The driver starts a driving session and can use the optional warm-up, context-aware movement breaks, pause/resume controls, and cooldown flow when safe.
+3. MOOVE records session activity and completed or skipped exercises in Supabase when configured.
+4. Dashboards and recommendations summarize driving, sedentary exposure, movement engagement, and wellness patterns.
+5. Participants can submit structured usability feedback and complete think-aloud testing.
+6. Administrators review feedback, participants, session analytics, action plans, iterations, and exportable TRL-4 documentation.
+
+## Minimum viable product (MVP)
 
 ### Driver application
 
@@ -71,18 +82,47 @@ MOOVE combines the following implemented elements:
 
 ## Screenshots
 
-Add project screenshots to a `docs/screenshots/` directory and replace these placeholders when they are available.
+The following screenshots reflect the current MOOVE prototype. Source files are maintained in [`docs/screenshots/`](docs/screenshots/).
 
-| Screen | Placeholder |
+### Public and driver experience
+
+| Landing page | Authentication |
 | --- | --- |
-| Landing page | `docs/screenshots/landing-page.png` |
-| Login and registration | `docs/screenshots/authentication.png` |
-| Driver dashboard | `docs/screenshots/driver-dashboard.png` |
-| Driving session | `docs/screenshots/driving-session.png` |
-| Exercise library | `docs/screenshots/exercise-library.png` |
-| Preventive health dashboard | `docs/screenshots/health-dashboard.png` |
-| AI insights | `docs/screenshots/ai-insights.png` |
-| Research admin dashboard | `docs/screenshots/admin-dashboard.png` |
+| ![MOOVE landing page](docs/screenshots/landing-page.png) | ![MOOVE login and registration](docs/screenshots/authentication.png) |
+
+| Driver dashboard | Driving session |
+| --- | --- |
+| ![MOOVE driver dashboard](docs/screenshots/driver-dashboard.png) | ![MOOVE driving session](docs/screenshots/driving-session.png) |
+
+| Exercise library | Preventive health dashboard |
+| --- | --- |
+| ![MOOVE exercise library](docs/screenshots/exercise-library.png) | ![MOOVE preventive health dashboard](docs/screenshots/health-dashboard.png) |
+
+| AI insights | Sedentary monitoring |
+| --- | --- |
+| ![MOOVE AI insights](docs/screenshots/ai-insights.png) | ![MOOVE sedentary monitoring](docs/screenshots/sedentary-monitor.png) |
+
+| Feedback dashboard | Profile and settings |
+| --- | --- |
+| ![MOOVE feedback dashboard](docs/screenshots/feedback-dashboard.png) | ![MOOVE driver profile settings](docs/screenshots/driver-profilesettings.png) |
+
+| Learning dashboard |
+| --- |
+| ![MOOVE learning dashboard](docs/screenshots/learn-dashboard.png) |
+
+### Research and administration
+
+| Research dashboard | Participants |
+| --- | --- |
+| ![MOOVE research dashboard](docs/screenshots/admin-researchdashboard.png) | ![MOOVE research participants](docs/screenshots/admin-participants.png) |
+
+| Analytics | Feedback analytics |
+| --- | --- |
+| ![MOOVE admin analytics](docs/screenshots/admin-analytics.png) | ![MOOVE admin feedback analytics](docs/screenshots/admin-feedback%20analytics.png) |
+
+| Demo monitoring | Research settings |
+| --- | --- |
+| ![MOOVE demo monitoring](docs/screenshots/admin-demo-monitoring.png) | ![MOOVE admin settings](docs/screenshots/admin-settings.png) |
 
 ## Technology stack
 
@@ -287,6 +327,26 @@ The client sends weekly aggregate activity data—driving minutes, completed exe
 
 The endpoint returns `{ summary, source }`, where `source` is `groq` or `fallback`. A fallback means the client can remain usable without an AI credential or during provider failure. In-browser recommendations use deterministic session and preference logic; they do not send a full personal profile to Groq.
 
+## API documentation
+
+MOOVE has one application HTTP API route. Supabase access is performed through the browser SDK under the database's Row Level Security policies; there is no separate REST-controller layer in this repository.
+
+| Route | Method | Request | Response | Description |
+| --- | --- | --- | --- | --- |
+| `/api/ai/wellness-summary` | `POST` | `weeklyDrivingMinutes`, `completedExercises`, `completedSessions`, and `exerciseCompletionRate` non-negative numbers; optional `tiredAreas` string array | `{ summary: string, source: "groq" \| "fallback" }` | Produces a concise preventive weekly wellness summary. Returns `400` for invalid payloads and `405` for other methods. |
+
+The client also calls the Supabase `upsert_admin_setting` RPC to write administrator settings after database-side authorization. The repository includes a Deno/Hono Supabase function scaffold under `supabase/functions/server/`; it is infrastructure support for the Figma Make environment, not a driver-facing API route.
+
+## User interface overview
+
+| Area | Implemented pages |
+| --- | --- |
+| Public and authentication | Landing page, login, registration, and password-reset request |
+| Driver workspace | Dashboard, driving sessions, guided exercises, AI recommendations, sedentary monitoring, health dashboard, education, feedback, settings, onboarding, research dashboard, and think-aloud testing |
+| Administrator workspace | Dashboard, participants, analytics, feedback analytics, demo monitoring, settings, and think-aloud testing |
+
+The route map is defined in [`src/routes.tsx`](src/routes.tsx). Pages are lazy-loaded, while the driver and administrator layouts enforce the appropriate access path.
+
 ## Authentication and access control
 
 ```mermaid
@@ -352,6 +412,21 @@ Keep the current split for the bundled MVP: branding images and the ten short ex
 4. Start `npm run dev` and test both a real Supabase account and the demo accounts.
 5. Verify driver onboarding, session lifecycle, feedback, and admin authorization.
 6. Run `npm run build` before deployment.
+
+## Research contribution
+
+MOOVE investigates how context-aware micro-break guidance can fit preventive health behavior into prolonged driving routines. Its intervention model combines sedentary-time awareness, short movement options with explicit safety contexts, configurable reminders, and post-session reflection. The research workspace captures structured ratings, task outcomes, feature feedback, free-text comments, and think-aloud responses so usability evidence can inform subsequent iterations.
+
+## Technology Readiness Level (TRL-4)
+
+MOOVE is documented as a TRL-4 research prototype because the repository implements an integrated, end-to-end system rather than isolated screens or components:
+
+- The React frontend, Supabase authentication, PostgreSQL persistence, Row Level Security, driver workflow, notifications, analytics, feedback collection, administrator review, and optional AI wellness summary work as connected modules.
+- A driver can progress from onboarding through session recording, exercise activity, feedback, and history; administrators can review collected evidence and generate structured TRL-4 reports.
+- The feedback analytics module records validation data, action plans, iteration history, export history, and a print-ready research report. Its exported report documents synthesis, prototype revision, revalidation, and finalization activities.
+- The implementation remains a controlled research prototype with local/demo fallbacks and documented production gaps; it is not represented as a large-scale deployed healthcare service.
+
+Together, these capabilities provide evidence of technical feasibility and integrated validation in a controlled context, supporting progression toward higher readiness levels after broader deployment and evaluation.
 
 ## Future improvements
 
