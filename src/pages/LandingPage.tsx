@@ -497,8 +497,8 @@ function FAQ() {
 // ─── About Us ─────────────────────────────────────────────────────────────────
 interface TeamMember {
   name: string
-  primaryRole: string
-  secondaryRole: string
+  position: string
+  professionalRole: string
   image: string
   bio: string
   highlights: string[]
@@ -510,11 +510,11 @@ interface TeamMember {
 const team: TeamMember[] = [
   {
     name: 'Anne Carol G. Jonson',
-    primaryRole: 'Full-Stack Developer',
-    secondaryRole: 'Lead Software Engineer',
+    position: 'CEO & Founder',
+    professionalRole: 'Full-Stack Developer · Lead Software Engineer',
     image: profilePicImg,
-    bio: "Anne Carol leads MOOVE's technical architecture and end-to-end implementation. With expertise spanning full-stack development, system design, AI integration, and UI/UX engineering, she brings the platform from research concept to production-ready software — ensuring every component is both technically robust and intuitively designed.",
-    highlights: ['Full-Stack Development', 'System Architecture', 'AI Integration', 'UI/UX Engineering', 'Preventive Health Platform'],
+    bio: 'Anne Carol is the visionary behind MOOVE, serving as its CEO, Founder, and Lead Software Engineer. She conceptualized the platform, created the MOOVE brand identity and the Moo mascot, and leads the end-to-end technical development of the application. With expertise spanning full-stack development, software architecture, AI integration, database engineering, and UI/UX design, she transformed MOOVE from a research concept into a production-ready preventive health platform. She oversees every aspect of the system—from frontend and backend implementation to intelligent features, user experience, and overall software quality—ensuring the platform is scalable, intuitive, technically robust, and research-driven.',
+    highlights: ['Full-Stack Development', 'Software Architecture', 'Lead Software Engineering', 'AI Integration', 'UI/UX Engineering', 'Branding & Product Design', 'Preventive Health Platform'],
     color: '#F97316',
     badge: '💻 Lead Developer',
     links: [
@@ -525,11 +525,11 @@ const team: TeamMember[] = [
   },
   {
     name: 'Jean-Abrey S. Serva',
-    primaryRole: 'Multimedia Designer',
-    secondaryRole: 'Lead Exercise Animation Designer',
+    position: 'Co-Founder',
+    professionalRole: 'Lead Exercise Animation Designer',
     image: abreyImg,
-    bio: "Jean-Abrey shapes MOOVE's entire visual identity — from the Moo mascot to step-by-step exercise animations that guide drivers through each movement. His expertise in character animation, motion graphics, and visual storytelling transforms complex physical exercises into intuitive, accessible, and beautifully animated experiences.",
-    highlights: ['Character Animation', 'Motion Graphics', 'Exercise Visualization', 'Visual Storytelling', 'UX Illustration'],
+    bio: 'Jean-Abrey leads the exercise animation design of MOOVE, bringing each guided movement to life through engaging and easy-to-follow visual demonstrations. He specializes in creating smooth exercise animations that help drivers correctly perform stretching and mobility routines before, during, and after driving sessions. Through his expertise in motion graphics, exercise visualization, animation design, and visual storytelling, he ensures that every exercise is intuitive, accessible, and visually engaging, enhancing both the usability and educational value of the platform.',
+    highlights: ['Exercise Animation', 'Motion Graphics', 'Exercise Visualization', 'Animation Design', 'Visual Storytelling', 'UX Illustration'],
     color: '#A855F7',
     badge: '🎨 Design Lead',
     links: [
@@ -548,41 +548,41 @@ function AboutUs() {
           <h2 className="font-display font-black text-4xl text-moove-brown mb-3">The People Behind MOOVE</h2>
           <p className="text-moove-muted max-w-xl mx-auto">A dedicated team combining software engineering, preventive health research, and multimedia design.</p>
         </div>
-        <div className="grid md:grid-cols-2 gap-8">
+        <div className="grid md:grid-cols-2 gap-8 lg:gap-10">
           {team.map(member => (
-            <div key={member.name} className="bg-white rounded-3xl p-8 card-shadow-lg hover-lift flex flex-col items-center text-center gap-5 border-2 border-transparent transition-all duration-300" onMouseEnter={e => (e.currentTarget.style.borderColor = `${member.color}30`)} onMouseLeave={e => (e.currentTarget.style.borderColor = 'transparent')}>
+            <article key={member.name} className="group min-h-full bg-white rounded-3xl p-6 sm:p-8 card-shadow-lg hover-lift flex flex-col items-center text-center gap-5 border-2 border-transparent transition-all duration-300" onMouseEnter={e => (e.currentTarget.style.borderColor = `${member.color}40`)} onMouseLeave={e => (e.currentTarget.style.borderColor = 'transparent')}>
               <div className="relative">
-                <div className="w-32 h-32 rounded-full overflow-hidden border-4 shadow-lg" style={{ borderColor: member.color }}>
-                  <img src={member.image} alt={member.name} className="w-full h-full object-cover object-top" loading="lazy" />
+                <div className="w-32 h-32 rounded-2xl overflow-hidden border-4 shadow-lg transition-transform duration-300 group-hover:scale-[1.03]" style={{ borderColor: member.color }}>
+                  <img src={member.image} alt={`Portrait of ${member.name}`} className="w-full h-full object-cover object-top" loading="lazy" />
                 </div>
                 <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 whitespace-nowrap text-xs font-bold px-3 py-1 rounded-full text-white shadow-md" style={{ background: member.color }}>{member.badge}</div>
               </div>
-              <div>
+              <div className="flex flex-col flex-1">
                 <h3 className="font-display font-black text-xl text-moove-brown mb-0.5">{member.name}</h3>
-                <div className="font-bold text-sm mb-0.5" style={{ color: member.color }}>{member.primaryRole}</div>
-                <div className="text-xs text-moove-muted mb-4">{member.secondaryRole}</div>
-                <p className="text-sm text-moove-muted leading-relaxed mb-4">{member.bio}</p>
-                <div className="flex flex-wrap justify-center gap-1.5">
+                <p className="font-bold text-sm mb-1" style={{ color: member.color }}>{member.position}</p>
+                <p className="text-xs font-semibold text-moove-muted mb-4">{member.professionalRole}</p>
+                <p className="text-sm text-moove-muted leading-6 mb-5">{member.bio}</p>
+                <div className="flex flex-wrap justify-center gap-2 mt-auto" aria-label={`${member.name} areas of expertise`}>
                   {member.highlights.map(h => <span key={h} className="text-xs font-semibold px-2.5 py-1 rounded-full" style={{ background: `${member.color}12`, color: member.color }}>{h}</span>)}
                 </div>
               </div>
-              <div className="flex gap-2 mt-auto pt-2">
+              <nav className="flex gap-2.5 mt-auto pt-2" aria-label={`${member.name} contact links`}>
                 {member.links.map(link => (
                   <a
                     key={link.label}
                     href={link.href}
                     target={link.href.startsWith('mailto') ? undefined : '_blank'}
                     rel={link.href.startsWith('mailto') ? undefined : 'noopener noreferrer'}
-                    aria-label={link.label}
+                    aria-label={`${member.name} ${link.label}`}
                     title={link.label}
-                    className="w-9 h-9 rounded-full flex items-center justify-center text-sm transition-all hover:scale-110 active:scale-95"
+                    className="w-10 h-10 rounded-full flex items-center justify-center text-base transition-all duration-200 hover:-translate-y-0.5 hover:scale-105 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
                     style={{ background: `${member.color}15`, color: member.color }}
                   >
                     {link.icon}
                   </a>
                 ))}
-              </div>
-            </div>
+              </nav>
+            </article>
           ))}
         </div>
         <div className="mt-12 flex flex-col items-center gap-3 opacity-70">
