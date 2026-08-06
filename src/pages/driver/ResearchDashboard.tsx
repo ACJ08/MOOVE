@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import mascotImg from '@/imports/_MASCOT_REMOVE_BG__MOOVE_CHARACTER.png'
-import type { FeedbackEntry } from './FeedbackValidation'
+import { supabase } from '@/lib/supabase'
+import { fetchFeedbackSubmissions, type AdminFeedbackRow } from '@/lib/db'
 
 // ─── UNLEASH Predefined Assumptions & KPIs ───────────────────────────────────
 
@@ -61,6 +62,8 @@ interface ComputedMetrics {
   easeLearning: number
   wouldUseAgainPct: number
   wouldRecommendPct: number
+  wouldUseAgainBreakdown: { yes: number; maybe: number; no: number }
+  wouldRecommendBreakdown: { yes: number; maybe: number; no: number }
   taskCompletionPct: number
   bugFreePct: number
   desirabilityScore: number
@@ -74,30 +77,43 @@ interface ComputedMetrics {
   needsImprovementFeatures: Record<string, number>
 }
 
-function computeMetrics(feedback: FeedbackEntry[]): ComputedMetrics {
+type ResearchFeedback = Pick<AdminFeedbackRow,
+  'overallRating' | 'firstImpression' | 'easeOfNavigation' | 'easeOfLearning' |
+  'wouldUseAgain' | 'wouldRecommend' | 'accomplishedTask' | 'bugExperience' |
+  'bugDescription' | 'mostUsefulFeature' | 'needsImprovement' | 'submittedAt'
+>
+
+const answer = (value: string | null | undefined) => value?.trim().toLowerCase() ?? ''
+
+function computeMetrics(feedback: ResearchFeedback[]): ComputedMetrics {
   const n = feedback.length
   if (n === 0) {
     return {
       n: 0, overallSatisfaction: 0, firstImpression: 0,
       easeNavigation: 0, easeLearning: 0, wouldUseAgainPct: 0,
       wouldRecommendPct: 0, taskCompletionPct: 0, bugFreePct: 0,
+      wouldUseAgainBreakdown: { yes: 0, maybe: 0, no: 0 }, wouldRecommendBreakdown: { yes: 0, maybe: 0, no: 0 },
       desirabilityScore: 0, feasibilityScore: 0, viabilityScore: 0,
       noBugs: 0, minorBugs: 0, moderateBugs: 0, majorBugs: 0,
       mostUsefulFeatures: {}, needsImprovementFeatures: {},
     }
   }
 
-  const overallSatisfaction = avg(feedback.map(f => f.overallRating).filter(v => v > 0))
-  const firstImpression = avg(feedback.map(f => f.firstImpression).filter(v => v > 0))
-  const easeNavigation = avg(feedback.map(f => f.easeOfNavigation).filter(v => v > 0))
-  const easeLearning = avg(feedback.map(f => f.easeOfLearning).filter(v => v > 0))
+  const ratings = (values: Array<number | null>) => values.filter((value): value is number => typeof value === 'number' && value > 0)
+  const overallSatisfaction = avg(ratings(feedback.map(f => f.overallRating)))
+  const firstImpression = avg(ratings(feedback.map(f => f.firstImpression)))
+  const easeNavigation = avg(ratings(feedback.map(f => f.easeOfNavigation)))
+  const easeLearning = avg(ratings(feedback.map(f => f.easeOfLearning)))
 
-  const wouldUseAgainPct = pct(feedback.map(f => f.wouldUseAgain), 'yes')
-  const wouldRecommendPct = pct(feedback.map(f => f.wouldRecommend), 'yes')
+  const wouldUseAgainPct = pct(feedback.map(f => answer(f.wouldUseAgain)), 'yes')
+  const wouldRecommendPct = pct(feedback.map(f => answer(f.wouldRecommend)), 'yes')
+  const breakdown = (values: Array<string | null>) => ({ yes: pct(values.map(answer), 'yes'), maybe: pct(values.map(answer), 'maybe'), no: pct(values.map(answer), 'no') })
+  const wouldUseAgainBreakdown = breakdown(feedback.map(f => f.wouldUseAgain))
+  const wouldRecommendBreakdown = breakdown(feedback.map(f => f.wouldRecommend))
 
   // Task completion = yes + partially
   const taskCompletionPct = Math.round(
-    (feedback.filter(f => f.accomplishedTask === 'yes' || f.accomplishedTask === 'partially').length / n) * 100
+    (feedback.filter(f => ['yes', 'partially'].includes(answer(f.accomplishedTask))).length / n) * 100
   )
 
   // Bug-free rate
@@ -133,6 +149,7 @@ function computeMetrics(feedback: FeedbackEntry[]): ComputedMetrics {
   return {
     n, overallSatisfaction, firstImpression, easeNavigation, easeLearning,
     wouldUseAgainPct, wouldRecommendPct, taskCompletionPct, bugFreePct,
+    wouldUseAgainBreakdown, wouldRecommendBreakdown,
     desirabilityScore, feasibilityScore, viabilityScore,
     noBugs, minorBugs, moderateBugs, majorBugs,
     mostUsefulFeatures, needsImprovementFeatures,
@@ -253,18 +270,18 @@ function ScoreRing({ score, label, color }: { score: number; label: string; colo
 const LOCAL_CONFIG_KEY = 'moove_unleash_config_loaded'
 
 export default function ResearchDashboard() {
-  const [feedback, setFeedback] = useState<FeedbackEntry[]>([])
+  const [feedback, setFeedback] = useState<ResearchFeedback[]>([])
   const [configLoaded, setConfigLoaded] = useState(false)
   const [tab, setTab] = useState<'overview' | 'kpis' | 'dfv' | 'features' | 'bugs'>('overview')
 
   useEffect(() => {
-    try {
-      const raw = JSON.parse(localStorage.getItem('moove_feedback_responses') || '[]')
-      const valid = (Array.isArray(raw) ? raw : []).filter(
-        (f: unknown) => f !== null && typeof f === 'object' && 'overallRating' in (f as object)
-      ) as FeedbackEntry[]
-      setFeedback(valid)
-    } catch { setFeedback([]) }
+    const loadFeedback = async () => setFeedback(await fetchFeedbackSubmissions())
+    void loadFeedback()
+    const channel = supabase?.channel('research-feedback').on('postgres_changes', { event: '*', schema: 'public', table: 'feedback_submissions' }, loadFeedback).subscribe()
+    return () => { if (channel) void supabase?.removeChannel(channel) }
+  }, [])
+
+  useEffect(() => {
     setConfigLoaded(!!localStorage.getItem(LOCAL_CONFIG_KEY))
   }, [])
 
@@ -418,6 +435,10 @@ export default function ResearchDashboard() {
                     </div>
                   </div>
                 ))}
+                <div className="grid grid-cols-2 gap-2 mt-4 pt-3 border-t border-moove-border text-[10px]">
+                  <div><b className="text-moove-brown block mb-1">Use again</b><span className="text-green-600">Yes {m.wouldUseAgainBreakdown.yes}%</span> · <span>Maybe {m.wouldUseAgainBreakdown.maybe}%</span> · <span className="text-red-500">No {m.wouldUseAgainBreakdown.no}%</span></div>
+                  <div><b className="text-moove-brown block mb-1">Recommend</b><span className="text-green-600">Yes {m.wouldRecommendBreakdown.yes}%</span> · <span>Maybe {m.wouldRecommendBreakdown.maybe}%</span> · <span className="text-red-500">No {m.wouldRecommendBreakdown.no}%</span></div>
+                </div>
               </div>
             </div>
           )}
@@ -618,7 +639,7 @@ export default function ResearchDashboard() {
                       <div key={i} className="p-3 rounded-xl bg-red-50 border border-red-100">
                         <div className="flex items-center gap-2 mb-1">
                           <span className="text-xs font-bold text-red-600 capitalize">{f.bugExperience}</span>
-                          <span className="text-xs text-moove-muted">· {f.date}</span>
+                          <span className="text-xs text-moove-muted">· {new Date(f.submittedAt).toLocaleDateString()}</span>
                         </div>
                         <p className="text-xs text-moove-brown leading-relaxed">{f.bugDescription}</p>
                       </div>

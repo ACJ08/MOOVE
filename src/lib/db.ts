@@ -551,6 +551,17 @@ function defaultTestingConfig(): TestingConfig {
 }
 
 export async function fetchTestingConfig(): Promise<TestingConfig> {
+  if (supabase) {
+    try {
+      const { data: testingConfig, error } = await supabase.from('testing_configurations').select('*').eq('id', 'current').maybeSingle()
+      if (!error && testingConfig) return {
+        sessionId: testingConfig.session_id, prototypeVersion: testingConfig.prototype_version,
+        userGroup: testingConfig.user_group ?? '', testingEnvironment: testingConfig.testing_environment ?? '',
+        studyStartDate: testingConfig.study_start_date ?? '', targetParticipants: String(testingConfig.target_participants ?? ''),
+        testingObjective: testingConfig.testing_objective ?? '', overallSuccessCriteria: testingConfig.overall_success_criteria ?? '',
+      }
+    } catch { /* legacy fallback */ }
+  }
   // Try Supabase first — admin_settings is now readable by all authenticated users
   if (supabase) {
     try {
@@ -666,6 +677,18 @@ export interface AdminFeedbackRow {
   mostUsefulFeature: string | null
   needsImprovement: string | null
   wouldRecommend: string | null
+  wouldUseAgain: string | null
+  bugExperience: string | null
+  bugDescription: string | null
+  confusingPart: string | null
+  featureRequest: string | null
+  userExperienceComment: string | null
+  firstImpressionComment: string | null
+  perceivedValueComment: string | null
+  easeOfUseComment: string | null
+  technicalReliabilityComment: string | null
+  bugFreeExperienceComment: string | null
+  continuedUsageComment: string | null
   submittedAt: string
 }
 
@@ -690,6 +713,18 @@ export async function fetchFeedbackSubmissions(): Promise<AdminFeedbackRow[]> {
       mostUsefulFeature: r.most_useful_feature,
       needsImprovement: r.needs_improvement,
       wouldRecommend: r.would_recommend,
+      wouldUseAgain: r.would_use_again,
+      bugExperience: r.bug_experience,
+      bugDescription: r.bug_description,
+      confusingPart: r.confusing_part,
+      featureRequest: r.feature_request,
+      userExperienceComment: r.user_experience_comment,
+      firstImpressionComment: r.first_impression_comment,
+      perceivedValueComment: r.perceived_value_comment,
+      easeOfUseComment: r.ease_of_use_comment,
+      technicalReliabilityComment: r.technical_reliability_comment,
+      bugFreeExperienceComment: r.bug_free_experience_comment,
+      continuedUsageComment: r.continued_usage_comment,
       submittedAt: r.submitted_at,
     }))
   } catch { return [] }

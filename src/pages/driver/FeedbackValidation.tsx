@@ -35,6 +35,13 @@ export interface FeedbackEntry {
   wouldRecommend: string
   additionalComments: string
   featureRequest: string
+  userExperienceComment: string
+  firstImpressionComment: string
+  perceivedValueComment: string
+  easeOfUseComment: string
+  technicalReliabilityComment: string
+  bugFreeExperienceComment: string
+  continuedUsageComment: string
   // Metadata
   submittedAt: string
   completionStatus: 'completed'
@@ -46,6 +53,11 @@ export interface FeedbackEntry {
 // Format: v<major>.<iteration>-TRL<level> — clearly signals prototype stage and iteration count
 const APP_VERSION = 'v0.49-TRL4'
 const TESTING_METHOD = 'User Feedback Survey (In-App Feedback Module)'
+
+function optionalComment(value: string) {
+  const cleaned = value.replace(/\s+/g, ' ').trim()
+  return cleaned ? cleaned.slice(0, 2000) : null
+}
 
 const APP_FEATURES = [
   { emoji: '🏠', label: 'Home', description: 'Overall dashboard and quick access' },
@@ -68,28 +80,6 @@ function getDeviceInfo() {
   return { device, browser }
 }
 
-function getActiveTestingSessionId(): string {
-  try {
-    const cfg = JSON.parse(localStorage.getItem('moove_testing_config') || '{}')
-    return cfg.sessionId ?? 'UNLEASH-2026'
-  } catch { return 'UNLEASH-2026' }
-}
-
-function getActiveProtoVersion(): string {
-  try {
-    const cfg = JSON.parse(localStorage.getItem('moove_testing_config') || '{}')
-    return cfg.prototypeVersion ?? APP_VERSION
-  } catch { return APP_VERSION }
-}
-
-function saveFeedbackLocal(entry: FeedbackEntry) {
-  try {
-    const existing = JSON.parse(localStorage.getItem('moove_feedback_responses') || '[]')
-    existing.push(entry)
-    localStorage.setItem('moove_feedback_responses', JSON.stringify(existing))
-  } catch { /* ignore */ }
-}
-
 async function saveFeedbackSupabase(entry: FeedbackEntry, userId: string | null): Promise<{ error: string | null }> {
   if (!supabase || !userId || userId === 'demo' || userId === 'admin-demo') return { error: null }
   try {
@@ -110,11 +100,20 @@ async function saveFeedbackSupabase(entry: FeedbackEntry, userId: string | null)
       most_useful_feature: entry.mostUsefulFeature,
       needs_improvement: entry.needsImprovement,
       confusing_part: entry.confusingPart || null,
+      bug_experience: entry.bugExperience,
+      bug_description: entry.bugDescription || null,
       bug_report: [entry.bugExperience !== 'none' ? `[${entry.bugExperience}] ${entry.bugDescription}` : '', entry.bugReport].filter(Boolean).join('\n') || null,
       would_use_again: entry.wouldUseAgain,
       would_recommend: entry.wouldRecommend,
       additional_comments: entry.additionalComments || null,
       feature_request: entry.featureRequest || null,
+      user_experience_comment: optionalComment(entry.userExperienceComment),
+      first_impression_comment: optionalComment(entry.firstImpressionComment),
+      perceived_value_comment: optionalComment(entry.perceivedValueComment),
+      ease_of_use_comment: optionalComment(entry.easeOfUseComment),
+      technical_reliability_comment: optionalComment(entry.technicalReliabilityComment),
+      bug_free_experience_comment: optionalComment(entry.bugFreeExperienceComment),
+      continued_usage_comment: optionalComment(entry.continuedUsageComment),
       device: entry.device,
       browser: entry.browser,
       submitted_at: entry.submittedAt,
@@ -149,6 +148,14 @@ function StarRating({ value, onChange, label }: { value: number; onChange: (v: n
       </div>
     </div>
   )
+}
+
+function OptionalComment({ label, placeholder, value, onChange }: { label: string; placeholder: string; value: string; onChange: (value: string) => void }) {
+  return <div className="mb-5">
+    <label className="text-xs font-semibold text-moove-brown mb-1.5 block">{label} <span className="text-moove-muted font-normal">(optional)</span></label>
+    <textarea rows={2} maxLength={2000} value={value} onChange={event => onChange(event.target.value)} placeholder={placeholder}
+      className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-moove-brown focus:outline-none focus:border-moove-orange resize-none" />
+  </div>
 }
 
 function ThreeWay({ label, value, onChange, options = ['Yes', 'Partially', 'No'] }: {
@@ -214,15 +221,21 @@ export default function FeedbackValidation() {
   const [submitted, setSubmitted] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
-  const [activeSessionId, setActiveSessionId] = useState(getActiveTestingSessionId)
-  const [activeVersion, setActiveVersion] = useState(getActiveProtoVersion)
+  const [activeSessionId, setActiveSessionId] = useState('')
+  const [activeVersion, setActiveVersion] = useState('')
+  const [testingObjective, setTestingObjective] = useState('')
 
   // Load testing config from Supabase on mount (syncs admin changes across devices)
   useEffect(() => {
     fetchTestingConfig().then(cfg => {
       setActiveSessionId(cfg.sessionId)
       setActiveVersion(cfg.prototypeVersion)
+      setTestingObjective(cfg.testingObjective)
     })
+    const channel = supabase?.channel('driver-testing-config').on('postgres_changes', { event: '*', schema: 'public', table: 'testing_configurations' }, () => {
+      void fetchTestingConfig().then(cfg => { setActiveSessionId(cfg.sessionId); setActiveVersion(cfg.prototypeVersion); setTestingObjective(cfg.testingObjective) })
+    }).subscribe()
+    return () => { if (channel) void supabase?.removeChannel(channel) }
   }, [])
 
   const showToast = (type: 'success' | 'error', message: string) => {
@@ -249,6 +262,13 @@ export default function FeedbackValidation() {
   const [wouldRecommend, setWouldRecommend] = useState('')
   const [additionalComments, setAdditionalComments] = useState('')
   const [featureRequest, setFeatureRequest] = useState('')
+  const [userExperienceComment, setUserExperienceComment] = useState('')
+  const [firstImpressionComment, setFirstImpressionComment] = useState('')
+  const [perceivedValueComment, setPerceivedValueComment] = useState('')
+  const [easeOfUseComment, setEaseOfUseComment] = useState('')
+  const [technicalReliabilityComment, setTechnicalReliabilityComment] = useState('')
+  const [bugFreeExperienceComment, setBugFreeExperienceComment] = useState('')
+  const [continuedUsageComment, setContinuedUsageComment] = useState('')
 
   const canProceed = () => {
     if (step === 0) return true
@@ -281,16 +301,17 @@ export default function FeedbackValidation() {
       bugDescription,
       bugReport,
       wouldUseAgain, wouldRecommend, additionalComments, featureRequest,
+      userExperienceComment, firstImpressionComment, perceivedValueComment, easeOfUseComment,
+      technicalReliabilityComment, bugFreeExperienceComment, continuedUsageComment,
       submittedAt: now.toISOString(),
       completionStatus: 'completed',
     }
-    // Always save locally first so data is never lost
-    saveFeedbackLocal(entry)
-    // Attempt Supabase sync
     const userId = user?.id ?? null
     const { error } = await saveFeedbackSupabase(entry, userId)
     setSubmitting(false)
     if (error) {
+      showToast('error', `Unable to submit feedback: ${error}`)
+      return
       showToast('error', 'Saved locally. Supabase sync failed: ' + error)
       // Still mark submitted — local copy is valid
     } else {
@@ -307,6 +328,8 @@ export default function FeedbackValidation() {
     setMostUsefulFeature(''); setNeedsImprovement(''); setConfusingPart('')
     setBugExperience(''); setBugDescription(''); setBugReport('')
     setWouldUseAgain(''); setWouldRecommend(''); setAdditionalComments(''); setFeatureRequest('')
+    setUserExperienceComment(''); setFirstImpressionComment(''); setPerceivedValueComment(''); setEaseOfUseComment('')
+    setTechnicalReliabilityComment(''); setBugFreeExperienceComment(''); setContinuedUsageComment('')
   }
 
   if (submitted) {
@@ -387,8 +410,8 @@ export default function FeedbackValidation() {
                 <div className="space-y-2 text-sm">
                   {[
                     { label: 'Testing Method', value: TESTING_METHOD },
-                    { label: 'Prototype Version', value: APP_VERSION },
-                    { label: 'Testing Session', value: getActiveTestingSessionId() },
+                    { label: 'Prototype Version', value: activeVersion || 'Loading…' },
+                    { label: 'Testing Session', value: activeSessionId || 'Loading…' },
                     { label: 'Driver ID', value: user?.email ?? 'Anonymous' },
                     { label: 'Date', value: new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) },
                   ].map(item => (
@@ -400,19 +423,12 @@ export default function FeedbackValidation() {
                 </div>
               </div>
 
-              {/* Admin-defined objective if available */}
-              {(() => {
-                try {
-                  const cfg = JSON.parse(localStorage.getItem('moove_testing_config') || '{}')
-                  if (!cfg.testingObjective) return null
-                  return (
+              {testingObjective && (
                     <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4">
                       <div className="text-xs font-black text-blue-700 tracking-widest mb-1">TESTING OBJECTIVE</div>
-                      <p className="text-sm text-blue-800">{cfg.testingObjective}</p>
+                      <p className="text-sm text-blue-800">{testingObjective}</p>
                     </div>
-                  )
-                } catch { return null }
-              })()}
+              )}
             </div>
 
             <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3.5 text-xs text-amber-800">
@@ -427,7 +443,9 @@ export default function FeedbackValidation() {
             <h2 className="font-display font-bold text-lg text-moove-brown mb-1">Overall Experience</h2>
             <p className="text-xs text-moove-muted mb-5">Rate your overall experience with the MOOVE application.</p>
             <StarRating label="Overall Rating" value={overallRating} onChange={setOverallRating} />
+            <OptionalComment label="User Experience comments" placeholder="What made your experience good or bad?" value={userExperienceComment} onChange={setUserExperienceComment} />
             <StarRating label="First Impression" value={firstImpression} onChange={setFirstImpression} />
+            <OptionalComment label="First impression comments" placeholder="What was your first impression of MOOVE?" value={firstImpressionComment} onChange={setFirstImpressionComment} />
           </div>
         )}
 
@@ -438,6 +456,7 @@ export default function FeedbackValidation() {
             <p className="text-xs text-moove-muted mb-5">How easy was the application to use?</p>
             <StarRating label="Ease of Navigation" value={easeOfNavigation} onChange={setEaseOfNavigation} />
             <StarRating label="Ease of Learning" value={easeOfLearning} onChange={setEaseOfLearning} />
+            <OptionalComment label="Ease of use comments" placeholder="What made the application easy or difficult to use?" value={easeOfUseComment} onChange={setEaseOfUseComment} />
             <ThreeWay
               label="Did the application help you accomplish your task?"
               value={accomplishedTask}
@@ -453,6 +472,7 @@ export default function FeedbackValidation() {
             <h2 className="font-display font-bold text-lg text-moove-brown mb-1">Features & Issues</h2>
             <p className="text-xs text-moove-muted mb-5">Help us understand which features worked and which need improvement.</p>
             <FeaturePicker label="Which feature was most useful?" value={mostUsefulFeature} onChange={setMostUsefulFeature} />
+            <OptionalComment label="Perceived value comments" placeholder="What features did you find valuable?" value={perceivedValueComment} onChange={setPerceivedValueComment} />
             <FeaturePicker label="Which feature needs the most improvement?" value={needsImprovement} onChange={setNeedsImprovement} includeNone={true} />
             <div className="mb-5">
               <label className="text-sm font-semibold text-moove-brown mb-2 block">Did anything confuse you?</label>
@@ -460,6 +480,8 @@ export default function FeedbackValidation() {
                 placeholder="Describe any confusing steps, labels, or workflows..."
                 className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-moove-brown focus:outline-none focus:border-moove-orange resize-none" />
             </div>
+            <OptionalComment label="Technical reliability comments" placeholder="Describe any issues that affected reliability or performance." value={technicalReliabilityComment} onChange={setTechnicalReliabilityComment} />
+            <OptionalComment label="Bug-free experience comments" placeholder="Did you encounter bugs or unexpected behavior?" value={bugFreeExperienceComment} onChange={setBugFreeExperienceComment} />
             <div className="mb-5">
               <div className="text-sm font-semibold text-moove-brown mb-2">Did you encounter any bugs while using MOOVE? <span className="text-red-500">*</span></div>
               <div className="grid grid-cols-2 gap-2">
@@ -507,6 +529,7 @@ export default function FeedbackValidation() {
               onChange={setWouldUseAgain}
               options={['Yes', 'Maybe', 'No']}
             />
+            <OptionalComment label="Continued usage comments" placeholder="Why would you continue using MOOVE?" value={continuedUsageComment} onChange={setContinuedUsageComment} />
             <ThreeWay
               label="Would you recommend MOOVE to other drivers?"
               value={wouldRecommend}

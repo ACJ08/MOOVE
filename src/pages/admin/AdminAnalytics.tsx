@@ -60,13 +60,10 @@ export default function AdminAnalytics() {
   const isEmpty = totalSessions === 0 && !loading
 
   // Daily active users chart (last 14 days)
-  const dauData = hasSupa
-    ? supabaseStats!.dailyActiveUsers.slice(-14)
-    : (() => {
-        const map: Record<string, number> = {}
-        sessions.forEach(s => { const d = s.startedAt.slice(0, 10); map[d] = (map[d] || 0) + 1 })
-        return Object.entries(map).slice(-14).map(([date, count]) => ({ date, count }))
-      })()
+  const dauData = hasSupa ? supabaseStats!.dailyActiveUsers.slice(-14) : (() => {
+    const days = Array.from({ length: 14 }, (_, index) => { const d = new Date(); d.setDate(d.getDate() - (13 - index)); return d.toISOString().slice(0, 10) })
+    return days.map(date => ({ date, count: new Set(sessions.filter(s => s.startedAt.slice(0, 10) === date).map(s => s.userId)).size }))
+  })()
 
   const maxDau = Math.max(...dauData.map(d => d.count), 1)
 
@@ -150,25 +147,8 @@ export default function AdminAnalytics() {
           {/* Daily Active Users chart */}
           {dauData.length > 0 && (
             <div className="bg-white rounded-2xl p-5 card-shadow lg:col-span-2">
-              <div className="text-xs font-bold text-moove-muted mb-4 tracking-wide">DAILY ACTIVE USERS (LAST 14 DAYS)</div>
-              <div className="flex items-end gap-1.5 h-32">
-                {dauData.map((d, i) => (
-                  <div key={i} className="flex-1 flex flex-col items-center gap-1">
-                    <div
-                      className="w-full rounded-t-md"
-                      style={{
-                        height: `${Math.max(4, (d.count / maxDau) * 100)}%`,
-                        background: 'linear-gradient(to top, #A855F7, #C084FC)',
-                        minHeight: '4px',
-                      }}
-                      title={`${d.date}: ${d.count}`}
-                    />
-                    <span className="text-[9px] text-moove-muted truncate w-full text-center">
-                      {d.date.slice(5)}
-                    </span>
-                  </div>
-                ))}
-              </div>
+              <div className="flex justify-between items-center mb-4"><div className="text-xs font-bold text-moove-muted tracking-wide">DAILY ACTIVE USERS (LAST 14 DAYS)</div><span className="text-xs text-purple-600 font-bold">● Unique drivers</span></div>
+              {dauData.every(d => d.count === 0) ? <div className="h-40 grid place-items-center text-center bg-moove-cream rounded-xl"><div><b className="block text-moove-brown">Activity will appear here</b><span className="text-xs text-moove-muted">Invite drivers to begin a recorded session.</span></div></div> : <div className="relative h-44 pt-3"><div className="absolute inset-x-0 top-3 bottom-7 flex flex-col justify-between pointer-events-none">{[0,1,2,3].map(i=><div key={i} className="border-t border-dashed border-purple-100" />)}</div><div className="relative h-[calc(100%-28px)] flex items-end gap-1.5">{dauData.map((d,i)=><div key={d.date} className="flex-1 h-full flex flex-col justify-end items-center group"><div className="opacity-0 group-hover:opacity-100 transition-opacity absolute -translate-y-8 bg-moove-brown text-white rounded-lg px-2 py-1 text-[10px] whitespace-nowrap z-10">{d.date}: {d.count} active</div><div className="w-full max-w-7 rounded-t-md bg-gradient-to-t from-purple-600 to-purple-300 hover:from-moove-orange hover:to-orange-300 transition-all" style={{height:`${Math.max(3,(d.count/maxDau)*100)}%`}} /><span className="mt-2 text-[9px] text-moove-muted">{i%2===0?d.date.slice(5):''}</span></div>)}</div></div>}
             </div>
           )}
 

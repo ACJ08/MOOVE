@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import type { FeedbackEntry } from '@/pages/driver/FeedbackValidation'
 import { fetchAllSessionsAdmin, fetchFeedbackSubmissions } from '@/lib/db'
+import { supabase } from '@/lib/supabase'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -37,6 +38,19 @@ function safeAvg(arr: number[]): number {
 
 function safePct(count: number, total: number): number {
   return total > 0 ? Math.round((count / total) * 100) : 0
+}
+
+const intentOptions = [
+  { l: 'Yes', v: 'yes', c: '#22C55E' },
+  { l: 'Partially', v: 'partially', c: '#FBBF24' },
+  { l: 'Maybe', v: 'maybe', c: '#FBBF24' },
+  { l: 'No', v: 'no', c: '#EF4444' },
+] as const
+
+function normaliseIntent(value: string | null | undefined): string {
+  const normalised = value?.trim().toLowerCase() ?? ''
+  if (normalised === 'partly') return 'partially'
+  return intentOptions.some(option => option.v === normalised) ? normalised : ''
 }
 
 function modeOf(arr: string[]): [string, number][] {
@@ -102,14 +116,23 @@ export default function AdminDashboard() {
           overallRating: f.overallRating ?? 0, firstImpression: f.firstImpression ?? 0,
           easeOfNavigation: f.easeOfNavigation ?? 0, easeOfLearning: f.easeOfLearning ?? 0,
           accomplishedTask: f.accomplishedTask ?? '', mostUsefulFeature: f.mostUsefulFeature ?? '',
-          needsImprovement: f.needsImprovement ?? '', wouldRecommend: f.wouldRecommend ?? '',
+          needsImprovement: f.needsImprovement ?? '',
+          wouldUseAgain: normaliseIntent(f.wouldUseAgain),
+          wouldRecommend: normaliseIntent(f.wouldRecommend),
           driverId: f.userId ?? '', date: f.submittedAt,
         }) as FeedbackEntry))
       } finally { setLoading(false) }
     }
     void load()
     window.addEventListener('moove:session-saved', load)
-    return () => window.removeEventListener('moove:session-saved', load)
+    const channel = supabase
+      ?.channel('research-dashboard-feedback')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'feedback_submissions' }, () => { void load() })
+      .subscribe()
+    return () => {
+      window.removeEventListener('moove:session-saved', load)
+      if (channel) void supabase?.removeChannel(channel)
+    }
   }, [])
 
   const n = feedback.length
@@ -119,8 +142,10 @@ export default function AdminDashboard() {
   const avgFirstImpression = safeAvg(feedback.map(f => f.firstImpression))
   const avgEaseNav = safeAvg(feedback.map(f => f.easeOfNavigation))
   const avgEaseLearn = safeAvg(feedback.map(f => f.easeOfLearning))
-  const recRate = safePct(feedback.filter(f => f.wouldRecommend === 'yes').length, n)
-  const useAgainRate = safePct(feedback.filter(f => f.wouldUseAgain === 'yes').length, n)
+  const recommendationAnswers = feedback.map(f => normaliseIntent(f.wouldRecommend)).filter(Boolean)
+  const useAgainAnswers = feedback.map(f => normaliseIntent(f.wouldUseAgain)).filter(Boolean)
+  const recRate = safePct(recommendationAnswers.filter(value => value === 'yes').length, recommendationAnswers.length)
+  const useAgainRate = safePct(useAgainAnswers.filter(value => value === 'yes').length, useAgainAnswers.length)
   const successRate = safePct(feedback.filter(f => f.accomplishedTask === 'yes').length, n)
 
   const avgSessionDuration = safeAvg(sessions.map(s => s.durationSeconds))
@@ -318,32 +343,23 @@ export default function AdminDashboard() {
                 { label: 'Would Recommend', key: 'wouldRecommend' as const },
                 { label: 'Accomplished Task', key: 'accomplishedTask' as const },
               ].map(q => {
-                const vals = feedback.map(f => f[q.key])
-                const options = [
-                  { l: 'Yes', v: 'yes', c: '#22C55E' },
-                  { l: 'Partially', v: 'partially', c: '#FBBF24' },
-                  { l: 'Maybe', v: 'maybe', c: '#FBBF24' },
-                  { l: 'No', v: 'no', c: '#EF4444' },
-                ].filter(o => vals.includes(o.v))
+                const vals = feedback.map(f => normaliseIntent(f[q.key])).filter(Boolean)
                 return (
                   <div key={q.label} className="bg-white rounded-2xl p-5 card-shadow">
                     <div className="text-xs font-black text-moove-muted mb-4 text-center tracking-widest">{q.label.toUpperCase()}</div>
-                    {[
-                      { l: 'Yes', v: 'yes', c: '#22C55E' },
-                      { l: 'Partially', v: 'partially', c: '#FBBF24' },
-                      { l: 'Maybe', v: 'maybe', c: '#FBBF24' },
-                      { l: 'No', v: 'no', c: '#EF4444' },
-                    ].map(o => {
+                    {vals.length === 0 ? (
+                      <div className="text-center py-8 text-sm text-moove-muted">No responses to this question yet.</div>
+                    ) : intentOptions.map(o => {
                       const count = vals.filter(v => v === o.v).length
-                      if (count === 0 && !options.map(op => op.v).includes(o.v)) return null
+                      if (count === 0) return null
                       return (
                         <div key={o.v} className="mb-2">
                           <div className="flex justify-between text-xs mb-1">
                             <span className="font-bold" style={{ color: o.c }}>{o.l}</span>
-                            <span className="font-bold text-moove-brown">{safePct(count, n)}%</span>
+                            <span className="font-bold text-moove-brown">{count} ({safePct(count, vals.length)}%)</span>
                           </div>
                           <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
-                            <div className="h-full rounded-full" style={{ width: `${safePct(count, n)}%`, background: o.c }} />
+                            <div className="h-full rounded-full" style={{ width: `${safePct(count, vals.length)}%`, background: o.c }} />
                           </div>
                         </div>
                       )

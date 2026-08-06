@@ -165,7 +165,7 @@ export default function LoginPage() {
               <div className="font-bold text-moove-brown mb-1.5">🔑 Demo Credentials</div>
               <div className="flex flex-col gap-1">
                 <div><span className="text-moove-muted">Driver: </span><span className="font-mono text-moove-brown">driver@moove.app</span> / <span className="font-mono text-moove-brown">Driver123!</span></div>
-                <div><span className="text-moove-muted">Admin: </span><span className="font-mono text-moove-brown">admin@moove.app</span> / <span className="font-mono text-moove-brown">Admin123!</span></div>
+                <div className="mt-1">Administrator access uses your Supabase Auth credentials.</div>
               </div>
             </div>
 

@@ -1,1037 +1,1168 @@
-import { useState, useMemo } from 'react'
-import type { FeedbackEntry } from '@/pages/driver/FeedbackValidation'
+import { useEffect, useMemo, useState } from 'react'
+import { supabase } from '@/lib/supabase'
+import { fetchFeedbackSubmissions, fetchTestingConfig, type AdminFeedbackRow, type TestingConfig } from '@/lib/db'
+import { useAuth } from '@/context/AuthContext'
+import StatCard from '@/components/admin-feedback/StatCard'
+import SectionHeader from '@/components/admin-feedback/SectionHeader'
+import Insights from '@/components/admin-feedback/Insights'
+import Classification from '@/components/admin-feedback/Classification'
+import RatingBreakdown from '@/components/admin-feedback/RatingBreakdown'
+import UserIntent from '@/components/admin-feedback/UserIntent'
+import ExportTab from '@/components/admin-feedback/ExportTab'
+import LearningReflection from '@/components/admin-feedback/LearningReflection'
+import { openFeedbackReport } from '@/lib/feedbackReport'
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+type Tab = 'Setup' | 'Overview' | 'Validation Insights' | 'Classification' | 'Learning' | 'Action Plan' | 'Iterations' | 'Export'
+type MetricType = 'rating' | 'percent'
+type MetricKey =
+  | 'overall_satisfaction_score'
+  | 'first_impression_score'
+  | 'navigation_usability_score'
+  | 'learnability_score'
+  | 'task_completion_rate'
+  | 'user_success_rate'
+  | 'retention_intent_rate'
+  | 'recommendation_rate'
+  | 'overall_user_satisfaction_composite'
+  | 'bug_free_rate'
 
-interface Assumption {
-  id: string; text: string; metric: string; successCriteria: string
-}
-interface Metric {
-  id: string; name: string; description: string; target: string; threshold: string
-}
-interface TestingConfig {
-  sessionId: string; prototypeVersion: string; testingObjective: string
-  userGroup: string; environment: string; startDate: string
-  targetParticipants: number; successCriteria: string
-  assumptions: Assumption[]; metrics: Metric[]; updatedAt: string
-}
-interface ActionItem {
-  id: string; issue: string; priority: 'High' | 'Medium' | 'Low'
-  suggestedSolution: string; status: 'Open' | 'In Progress' | 'Done'; retestRequired: boolean
-}
-interface Iteration {
-  id: string; version: string; testingCycle: string; improvementsMade: string
-  retestingStatus: 'Pending' | 'In Progress' | 'Complete'
-}
-
-// ─── Storage helpers ──────────────────────────────────────────────────────────
-
-function loadFeedback(): FeedbackEntry[] {
-  try { return JSON.parse(localStorage.getItem('moove_feedback_responses') || '[]') } catch { return [] }
-}
-function loadConfig(): TestingConfig {
-  const defaults: TestingConfig = {
-    sessionId: 'UNLEASH-2026', prototypeVersion: 'v0.49-TRL4',
-    testingObjective: '', userGroup: '', environment: '', startDate: '',
-    targetParticipants: 10, successCriteria: '',
-    assumptions: [], metrics: [], updatedAt: '',
-  }
-  try { return { ...defaults, ...JSON.parse(localStorage.getItem('moove_testing_config') || '{}') } }
-  catch { return defaults }
-}
-function saveConfig(cfg: TestingConfig) {
-  try { localStorage.setItem('moove_testing_config', JSON.stringify({ ...cfg, updatedAt: new Date().toISOString() })) }
-  catch { /* ignore */ }
-}
-function loadActions(): ActionItem[] {
-  try { return JSON.parse(localStorage.getItem('moove_action_plan') || '[]') } catch { return [] }
-}
-function saveActions(items: ActionItem[]) {
-  try { localStorage.setItem('moove_action_plan', JSON.stringify(items)) } catch { /* ignore */ }
-}
-function loadIterations(): Iteration[] {
-  try { return JSON.parse(localStorage.getItem('moove_iterations') || '[]') } catch { return [] }
-}
-function saveIterations(items: Iteration[]) {
-  try { localStorage.setItem('moove_iterations', JSON.stringify(items)) } catch { /* ignore */ }
+type ValidationAssumption = {
+  id: string
+  title: string
+  description: string
+  metricKey: MetricKey
+  targetLabel: string
+  targetType: MetricType
+  targetValue: number
+  icon: string
 }
 
-// ─── Analytics helpers ────────────────────────────────────────────────────────
-
-function avg(arr: number[]) {
-  const v = arr.filter(n => n > 0)
-  return v.length ? Math.round((v.reduce((a, b) => a + b, 0) / v.length) * 10) / 10 : 0
-}
-function pct(count: number, total: number) {
-  return total > 0 ? Math.round((count / total) * 100) : 0
-}
-function mode(arr: string[]) {
-  const freq: Record<string, number> = {}
-  arr.forEach(s => s && (freq[s] = (freq[s] ?? 0) + 1))
-  return Object.entries(freq).sort((a, b) => b[1] - a[1])
-}
-
-// ─── Shared UI ────────────────────────────────────────────────────────────────
-
-function StatCard({ icon, label, value, sub, color = '#F97316' }: { icon: string; label: string; value: string; sub?: string; color?: string }) {
-  return (
-    <div className="bg-white rounded-2xl p-4 card-shadow text-center">
-      <div className="text-2xl mb-1">{icon}</div>
-      <div className="font-display font-black text-2xl leading-tight" style={{ color }}>{value}</div>
-      {sub && <div className="text-[10px] text-moove-muted mt-0.5">{sub}</div>}
-      <div className="text-xs text-moove-muted mt-1">{label}</div>
-    </div>
-  )
+type EvaluationMetric = {
+  id: string
+  key: MetricKey
+  name: string
+  description: string
+  formula: string
+  targetLabel: string
+  passThresholdLabel: string
+  targetType: MetricType
+  targetValue: number
+  passThreshold: number
+  icon: string
 }
 
-function RatingBar({ label, value, max = 5, color = '#F97316' }: { label: string; value: number; max?: number; color?: string }) {
-  return (
-    <div className="mb-3">
-      <div className="flex justify-between mb-1">
-        <span className="text-xs font-semibold text-moove-brown">{label}</span>
-        <span className="text-xs font-black" style={{ color }}>{value.toFixed(1)}/{max}</span>
-      </div>
-      <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-        <div className="h-full rounded-full transition-all duration-700" style={{ width: `${(value / max) * 100}%`, background: color }} />
-      </div>
-    </div>
-  )
+type FrameworkState = {
+  assumptions: ValidationAssumption[]
+  metrics: EvaluationMetric[]
+  frameworkVersion: string
+  metadata: Record<string, unknown>
 }
 
-function SectionHeader({ children }: { children: React.ReactNode }) {
-  return <div className="text-xs font-black text-moove-muted tracking-widest mb-3 uppercase">{children}</div>
+type Action = { id: string; issue: string; title: string | null; category: string | null; description: string; reason: string; expected_outcome: string; priority: 'High' | 'Medium' | 'Low'; status: 'Open' | 'In Progress' | 'Done'; completion_percentage: number; target_completion_date: string | null; completed_date: string | null; notes: string; risks: string; mitigation_strategy: string; suggested_solution: string; retest_required: boolean }
+type Iteration = { id: string; version: string; testing_cycle: string; iteration_number: number | null; iteration_name: string | null; phase: string; objective: string; summary: string; work_completed: string; feedback_received: string; improvements_made: string; issues_found: string; resolution: string; validation_result: string; completion_percentage: number; status: 'Planned' | 'In Progress' | 'Complete'; retesting_status: 'Pending' | 'In Progress' | 'Complete'; start_date: string | null; end_date: string | null }
+
+const defaultConfig: TestingConfig = {
+  sessionId: '',
+  prototypeVersion: '',
+  userGroup: '',
+  testingEnvironment: '',
+  studyStartDate: '',
+  targetParticipants: '',
+  testingObjective: '',
+  overallSuccessCriteria: '',
 }
 
-// ─── Predefined validation framework (derived from FeedbackValidation questions) ─
-
-const PREDEFINED_ASSUMPTIONS: Omit<Assumption, 'id'>[] = [
-  { text: 'Drivers can intuitively navigate MOOVE without prior training or documentation.', metric: 'Ease of Navigation Score', successCriteria: '≥ 4.0 / 5 average rating' },
-  { text: 'The prototype creates a strong positive first impression on new users.', metric: 'First Impression Score', successCriteria: '≥ 4.0 / 5 average rating' },
-  { text: 'Drivers can independently learn how to use all core features within one session.', metric: 'Ease of Learning Score', successCriteria: '≥ 4.0 / 5 average rating' },
-  { text: 'Drivers can successfully accomplish their intended task using MOOVE without external assistance.', metric: 'Task Completion Rate', successCriteria: '≥ 80% respond "Yes"' },
-  { text: 'Drivers are satisfied with their overall experience and would use MOOVE again.', metric: 'Retention Intent Rate', successCriteria: '≥ 75% respond "Yes"' },
-  { text: 'Drivers would recommend MOOVE to other professional drivers.', metric: 'Recommendation Rate', successCriteria: '≥ 70% respond "Yes"' },
-  { text: 'The prototype delivers a satisfactory overall user experience across all dimensions.', metric: 'Overall User Satisfaction (Composite)', successCriteria: '≥ 3.5 / 5 composite average' },
+const PREDEFINED_ASSUMPTIONS: ValidationAssumption[] = [
+  {
+    id: 'assumption_1',
+    title: 'Drivers can intuitively navigate MOOVE without prior training or documentation.',
+    description: 'Ease of Navigation Score must indicate independent navigation confidence.',
+    metricKey: 'navigation_usability_score',
+    targetLabel: '>= 4.0 / 5 average rating',
+    targetType: 'rating',
+    targetValue: 4,
+    icon: '🧭',
+  },
+  {
+    id: 'assumption_2',
+    title: 'The prototype creates a strong positive first impression on new users.',
+    description: 'First Impression Score should pass early emotional and visual response checks.',
+    metricKey: 'first_impression_score',
+    targetLabel: '>= 4.0 / 5 average rating',
+    targetType: 'rating',
+    targetValue: 4,
+    icon: '✨',
+  },
+  {
+    id: 'assumption_3',
+    title: 'Drivers can independently learn how to use all core features within one session.',
+    description: 'Ease of Learning Score indicates onboarding clarity and discoverability.',
+    metricKey: 'learnability_score',
+    targetLabel: '>= 4.0 / 5 average rating',
+    targetType: 'rating',
+    targetValue: 4,
+    icon: '📘',
+  },
+  {
+    id: 'assumption_4',
+    title: 'Drivers can successfully accomplish their intended task using MOOVE without external assistance.',
+    description: 'Task completion answers must demonstrate successful independent outcomes.',
+    metricKey: 'task_completion_rate',
+    targetLabel: '>= 80% respond "Yes"',
+    targetType: 'percent',
+    targetValue: 80,
+    icon: '✅',
+  },
+  {
+    id: 'assumption_5',
+    title: 'Drivers are satisfied with their overall experience and would use MOOVE again.',
+    description: 'Retention intent should show strong willingness for continued usage.',
+    metricKey: 'retention_intent_rate',
+    targetLabel: '>= 75% respond "Yes"',
+    targetType: 'percent',
+    targetValue: 75,
+    icon: '🔁',
+  },
+  {
+    id: 'assumption_6',
+    title: 'Drivers would recommend MOOVE to other professional drivers.',
+    description: 'Recommendation intent should validate word-of-mouth confidence.',
+    metricKey: 'recommendation_rate',
+    targetLabel: '>= 70% respond "Yes"',
+    targetType: 'percent',
+    targetValue: 70,
+    icon: '📣',
+  },
+  {
+    id: 'assumption_7',
+    title: 'The prototype delivers a satisfactory overall user experience across all dimensions.',
+    description: 'Composite score across Q1-Q4 reflects holistic experience quality.',
+    metricKey: 'overall_user_satisfaction_composite',
+    targetLabel: '>= 3.5 / 5 composite average',
+    targetType: 'rating',
+    targetValue: 3.5,
+    icon: '📊',
+  },
 ]
 
-const PREDEFINED_METRICS: Omit<Metric, 'id'>[] = [
-  { name: 'Overall Satisfaction Score', description: 'Average of Q1 — Overall Rating (1–5 stars)', target: '≥ 4.0 / 5', threshold: '≥ 3.5 / 5 (PASS)' },
-  { name: 'First Impression Score', description: 'Average of Q2 — First Impression (1–5 stars)', target: '≥ 4.0 / 5', threshold: '≥ 3.5 / 5 (PASS)' },
-  { name: 'Navigation Usability Score', description: 'Average of Q3 — Ease of Navigation (1–5 stars)', target: '≥ 4.0 / 5', threshold: '≥ 3.5 / 5 (PASS)' },
-  { name: 'Learnability Score', description: 'Average of Q4 — Ease of Learning (1–5 stars)', target: '≥ 4.0 / 5', threshold: '≥ 3.5 / 5 (PASS)' },
-  { name: 'Task Completion Rate', description: '% of users who answered "Yes" to Q5 — Accomplished Task', target: '≥ 80%', threshold: '≥ 70% (PASS)' },
-  { name: 'User Success Rate', description: '% who answered "Yes" or "Partially" to Q5 — broader success', target: '≥ 85%', threshold: '≥ 75% (PASS)' },
-  { name: 'Retention Intent Rate', description: '% who answered "Yes" to Q9 — Would Use Again', target: '≥ 75%', threshold: '≥ 60% (PASS)' },
-  { name: 'Recommendation Rate', description: '% who answered "Yes" to Q10 — Would Recommend', target: '≥ 70%', threshold: '≥ 60% (PASS)' },
-  { name: 'Overall User Satisfaction (Composite)', description: 'Weighted average of all four rating dimensions (Q1–Q4)', target: '≥ 4.0 / 5', threshold: '≥ 3.5 / 5 (PASS)' },
-  { name: 'Bug-Free Rate', description: '% of submissions with no bug report entered', target: '≥ 80%', threshold: '≥ 70% (PASS)' },
+const PREDEFINED_METRICS: EvaluationMetric[] = [
+  {
+    id: 'metric_1',
+    key: 'overall_satisfaction_score',
+    name: 'Overall Satisfaction Score',
+    description: 'Overall satisfaction from Q1 star ratings.',
+    formula: 'Average of Q1 — Overall Rating (1–5 stars)',
+    targetLabel: '>= 4.0 / 5',
+    passThresholdLabel: '>= 3.5 / 5',
+    targetType: 'rating',
+    targetValue: 4,
+    passThreshold: 3.5,
+    icon: '⭐',
+  },
+  {
+    id: 'metric_2',
+    key: 'first_impression_score',
+    name: 'First Impression Score',
+    description: 'Immediate first impression quality from Q2 ratings.',
+    formula: 'Average of Q2',
+    targetLabel: '>= 4.0 / 5',
+    passThresholdLabel: '>= 3.5 / 5',
+    targetType: 'rating',
+    targetValue: 4,
+    passThreshold: 3.5,
+    icon: '✨',
+  },
+  {
+    id: 'metric_3',
+    key: 'navigation_usability_score',
+    name: 'Navigation Usability Score',
+    description: 'Perceived navigation clarity and ease from Q3 ratings.',
+    formula: 'Average of Q3',
+    targetLabel: '>= 4.0 / 5',
+    passThresholdLabel: '>= 3.5 / 5',
+    targetType: 'rating',
+    targetValue: 4,
+    passThreshold: 3.5,
+    icon: '🧭',
+  },
+  {
+    id: 'metric_4',
+    key: 'learnability_score',
+    name: 'Learnability Score',
+    description: 'How quickly users can learn the core product in one session.',
+    formula: 'Average of Q4',
+    targetLabel: '>= 4.0 / 5',
+    passThresholdLabel: '>= 3.5 / 5',
+    targetType: 'rating',
+    targetValue: 4,
+    passThreshold: 3.5,
+    icon: '📘',
+  },
+  {
+    id: 'metric_5',
+    key: 'task_completion_rate',
+    name: 'Task Completion Rate',
+    description: 'Share of participants who answered Yes to accomplishing their task.',
+    formula: 'Percentage of users answering Yes to Q5',
+    targetLabel: '>= 80%',
+    passThresholdLabel: '>= 70%',
+    targetType: 'percent',
+    targetValue: 80,
+    passThreshold: 70,
+    icon: '✅',
+  },
+  {
+    id: 'metric_6',
+    key: 'user_success_rate',
+    name: 'User Success Rate',
+    description: 'Broad success indicator including partial completion.',
+    formula: 'Percentage answering Yes or Partially',
+    targetLabel: '>= 85%',
+    passThresholdLabel: '>= 75%',
+    targetType: 'percent',
+    targetValue: 85,
+    passThreshold: 75,
+    icon: '🎯',
+  },
+  {
+    id: 'metric_7',
+    key: 'retention_intent_rate',
+    name: 'Retention Intent Rate',
+    description: 'Likelihood of continued use after trial session.',
+    formula: 'Percentage answering Yes to Q9',
+    targetLabel: '>= 75%',
+    passThresholdLabel: '>= 60%',
+    targetType: 'percent',
+    targetValue: 75,
+    passThreshold: 60,
+    icon: '🔁',
+  },
+  {
+    id: 'metric_8',
+    key: 'recommendation_rate',
+    name: 'Recommendation Rate',
+    description: 'Word-of-mouth recommendation confidence.',
+    formula: 'Percentage answering Yes to Q10',
+    targetLabel: '>= 70%',
+    passThresholdLabel: '>= 60%',
+    targetType: 'percent',
+    targetValue: 70,
+    passThreshold: 60,
+    icon: '📣',
+  },
+  {
+    id: 'metric_9',
+    key: 'overall_user_satisfaction_composite',
+    name: 'Overall User Satisfaction (Composite)',
+    description: 'Weighted outcome proxy for complete user experience.',
+    formula: 'Weighted Average of Q1–Q4',
+    targetLabel: '>= 4.0 / 5',
+    passThresholdLabel: '>= 3.5 / 5',
+    targetType: 'rating',
+    targetValue: 4,
+    passThreshold: 3.5,
+    icon: '📊',
+  },
+  {
+    id: 'metric_10',
+    key: 'bug_free_rate',
+    name: 'Bug-Free Rate',
+    description: 'Submission quality metric without reported bugs.',
+    formula: 'Percentage of submissions without a reported bug',
+    targetLabel: '>= 80%',
+    passThresholdLabel: '>= 70%',
+    targetType: 'percent',
+    targetValue: 80,
+    passThreshold: 70,
+    icon: '🐞',
+  },
 ]
 
-// ─── Tab: Setup ───────────────────────────────────────────────────────────────
+const configFields: Array<{ key: keyof TestingConfig; label: string; required?: boolean; type?: 'text' | 'date' | 'number' }> = [
+  { key: 'sessionId', label: 'Testing Session ID', required: true },
+  { key: 'prototypeVersion', label: 'Prototype Version', required: true },
+  { key: 'userGroup', label: 'User Group' },
+  { key: 'testingEnvironment', label: 'Testing Environment' },
+  { key: 'studyStartDate', label: 'Study Start Date', type: 'date' },
+  { key: 'targetParticipants', label: 'Target Participants', type: 'number' },
+  { key: 'testingObjective', label: 'Testing Objective', required: true },
+  { key: 'overallSuccessCriteria', label: 'Overall Success Criteria' },
+]
 
-function SetupTab() {
-  const [config, setConfig] = useState<TestingConfig>(loadConfig)
-  const [saved, setSaved] = useState(false)
-  const [showFramework, setShowFramework] = useState(false)
+const CARD_HEADER_COLORS = ['#0EA5E9', '#F97316', '#A855F7', '#22C55E', '#F59E0B', '#14B8A6', '#EF4444', '#7C3AED', '#10B981', '#3B82F6']
 
-  const updateAssumption = (id: string, field: keyof Assumption, val: string) =>
-    setConfig(c => ({ ...c, assumptions: c.assumptions.map(a => a.id === id ? { ...a, [field]: val } : a) }))
-  const addAssumption = () =>
-    setConfig(c => ({ ...c, assumptions: [...c.assumptions, { id: Date.now().toString(), text: '', metric: '', successCriteria: '' }] }))
-  const removeAssumption = (id: string) =>
-    setConfig(c => ({ ...c, assumptions: c.assumptions.filter(a => a.id !== id) }))
+const cloneAssumptions = () => PREDEFINED_ASSUMPTIONS.map(item => ({ ...item }))
+const cloneMetrics = () => PREDEFINED_METRICS.map(item => ({ ...item }))
 
-  const updateMetric = (id: string, field: keyof Metric, val: string) =>
-    setConfig(c => ({ ...c, metrics: c.metrics.map(m => m.id === id ? { ...m, [field]: val } : m) }))
-  const addMetric = () =>
-    setConfig(c => ({ ...c, metrics: [...c.metrics, { id: Date.now().toString(), name: '', description: '', target: '', threshold: '' }] }))
-  const removeMetric = (id: string) =>
-    setConfig(c => ({ ...c, metrics: c.metrics.filter(m => m.id !== id) }))
-
-  const loadPredefined = () => {
-    setConfig(c => ({
-      ...c,
-      prototypeVersion: c.prototypeVersion || 'v0.49-TRL4',
-      testingObjective: c.testingObjective || 'Validate the usability, desirability, and adoption intent of the MOOVE v0.49-TRL4 prototype with professional drivers during the UNLEASH Testing Phase.',
-      successCriteria: c.successCriteria || 'Overall User Satisfaction Composite ≥ 3.5/5 AND Task Completion Rate ≥ 70% AND Recommendation Rate ≥ 60%',
-      assumptions: PREDEFINED_ASSUMPTIONS.map((a, i) => ({ ...a, id: `pre_a_${i}` })),
-      metrics: PREDEFINED_METRICS.map((m, i) => ({ ...m, id: `pre_m_${i}` })),
-    }))
-  }
-
-  const handleSave = () => {
-    saveConfig(config)
-    setSaved(true)
-    setTimeout(() => setSaved(false), 2000)
-  }
-
-  const inputCls = "w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-moove-brown focus:outline-none focus:border-moove-orange"
-
-  return (
-    <div className="space-y-5">
-
-      {/* Predefined framework banner */}
-      <div className="bg-gradient-to-r from-orange-50 to-amber-50 border border-orange-200 rounded-2xl p-4">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <div className="text-xs font-black text-moove-orange tracking-widest mb-1">UNLEASH VALIDATION FRAMEWORK</div>
-            <p className="text-xs text-moove-brown">
-              Load the predefined assumptions and metrics derived directly from the Feedback survey questions (Overall Rating, First Impression, Ease of Navigation, Ease of Learning, Task Completion, Retention Intent, Recommendation Rate).
-            </p>
-          </div>
-          <button onClick={() => setShowFramework(v => !v)}
-            className="shrink-0 text-xs font-bold text-moove-orange border border-moove-orange px-3 py-1.5 rounded-xl hover:bg-orange-100 whitespace-nowrap">
-            {showFramework ? 'Hide' : 'View Framework'}
-          </button>
-        </div>
-
-        {showFramework && (
-          <div className="mt-4 space-y-2">
-            <div className="text-xs font-black text-moove-muted tracking-widest mb-2">RATING INTERPRETATION</div>
-            {[
-              { range: '4.5 – 5.0', label: 'Excellent', color: '#22C55E' },
-              { range: '4.0 – 4.4', label: 'Good — meets target', color: '#84CC16' },
-              { range: '3.5 – 3.9', label: 'Acceptable — meets threshold', color: '#FBBF24' },
-              { range: '3.0 – 3.4', label: 'Below threshold — needs improvement', color: '#F97316' },
-              { range: '< 3.0',     label: 'Fail — significant issues', color: '#EF4444' },
-            ].map(r => (
-              <div key={r.range} className="flex items-center gap-3">
-                <div className="w-2 h-2 rounded-full shrink-0" style={{ background: r.color }} />
-                <span className="text-xs font-bold text-moove-brown w-24 shrink-0">{r.range}</span>
-                <span className="text-xs text-moove-muted">{r.label}</span>
-              </div>
-            ))}
-
-            <div className="text-xs font-black text-moove-muted tracking-widest mt-3 mb-2">OVERALL USER SATISFACTION FORMULA</div>
-            <div className="bg-white rounded-xl p-3 text-xs text-moove-brown font-mono border border-orange-100">
-              OUS = (OverallRating + FirstImpression + EaseOfNavigation + EaseOfLearning) ÷ 4<br />
-              <span className="text-moove-muted">Pass: OUS ≥ 3.5 &nbsp;|&nbsp; Target: OUS ≥ 4.0 &nbsp;|&nbsp; Excellent: OUS ≥ 4.5</span>
-            </div>
-
-            <button onClick={loadPredefined}
-              className="w-full mt-3 py-2.5 rounded-xl bg-moove-orange text-white text-xs font-bold hover:opacity-90 transition-all">
-              ✓ Load All Predefined Assumptions & Metrics
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* Session Info */}
-      <div className="bg-white rounded-2xl p-5 card-shadow">
-        <SectionHeader>Testing Session Configuration</SectionHeader>
-        <div className="grid sm:grid-cols-2 gap-3">
-          {[
-            { key: 'sessionId' as const, label: 'Session ID' },
-            { key: 'prototypeVersion' as const, label: 'Prototype Version' },
-            { key: 'userGroup' as const, label: 'User Group' },
-            { key: 'environment' as const, label: 'Testing Environment' },
-            { key: 'startDate' as const, label: 'Start Date', type: 'date' },
-          ].map(f => (
-            <div key={f.key}>
-              <label className="text-xs font-semibold text-moove-brown mb-1 block">{f.label}</label>
-              <input type={f.type ?? 'text'} value={config[f.key] as string}
-                onChange={e => setConfig(c => ({ ...c, [f.key]: e.target.value }))}
-                className={inputCls} />
-            </div>
-          ))}
-          <div>
-            <label className="text-xs font-semibold text-moove-brown mb-1 block">Target Participants</label>
-            <input type="number" min={1} value={config.targetParticipants}
-              onChange={e => setConfig(c => ({ ...c, targetParticipants: Number(e.target.value) }))}
-              className={inputCls} />
-          </div>
-        </div>
-        <div className="mt-3">
-          <label className="text-xs font-semibold text-moove-brown mb-1 block">Testing Objective</label>
-          <textarea rows={2} value={config.testingObjective}
-            onChange={e => setConfig(c => ({ ...c, testingObjective: e.target.value }))}
-            placeholder="What are you trying to validate in this testing cycle?"
-            className={`${inputCls} resize-none`} />
-        </div>
-        <div className="mt-3">
-          <label className="text-xs font-semibold text-moove-brown mb-1 block">Overall Success Criteria</label>
-          <textarea rows={2} value={config.successCriteria}
-            onChange={e => setConfig(c => ({ ...c, successCriteria: e.target.value }))}
-            placeholder="e.g. ≥ 80% task completion, ≥ 4/5 ease of use rating"
-            className={`${inputCls} resize-none`} />
-        </div>
-      </div>
-
-      {/* Assumptions */}
-      <div className="bg-white rounded-2xl p-5 card-shadow">
-        <div className="flex justify-between items-center mb-3">
-          <SectionHeader>Validation Assumptions</SectionHeader>
-          <button onClick={addAssumption} className="text-xs font-bold text-moove-orange border border-moove-orange px-3 py-1 rounded-xl hover:bg-orange-50">+ Add</button>
-        </div>
-        {config.assumptions.length === 0 && (
-          <p className="text-xs text-moove-muted py-4 text-center">No assumptions defined. Use "View Framework" above to load predefined assumptions.</p>
-        )}
-        <div className="space-y-4">
-          {config.assumptions.map((a, i) => (
-            <div key={a.id} className="border border-moove-border rounded-2xl p-4">
-              <div className="flex justify-between items-center mb-2">
-                <span className="text-xs font-bold text-moove-orange">Assumption {i + 1}</span>
-                <button onClick={() => removeAssumption(a.id)} className="text-red-400 text-xs hover:text-red-600">✕ Remove</button>
-              </div>
-              <div className="space-y-2">
-                <textarea rows={2} value={a.text} onChange={e => updateAssumption(a.id, 'text', e.target.value)}
-                  placeholder="Assumption statement — e.g. Drivers can complete the fatigue workflow without assistance."
-                  className={`${inputCls} resize-none`} />
-                <input value={a.metric} onChange={e => updateAssumption(a.id, 'metric', e.target.value)}
-                  placeholder="Linked metric — e.g. User Success Rate"
-                  className={inputCls} />
-                <input value={a.successCriteria} onChange={e => updateAssumption(a.id, 'successCriteria', e.target.value)}
-                  placeholder="Success criteria — e.g. ≥ 90% positive responses"
-                  className={inputCls} />
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Metrics */}
-      <div className="bg-white rounded-2xl p-5 card-shadow">
-        <div className="flex justify-between items-center mb-3">
-          <SectionHeader>Predefined Evaluation Metrics & KPIs</SectionHeader>
-          <button onClick={addMetric} className="text-xs font-bold text-moove-orange border border-moove-orange px-3 py-1 rounded-xl hover:bg-orange-50">+ Add</button>
-        </div>
-        {config.metrics.length === 0 && (
-          <p className="text-xs text-moove-muted py-4 text-center">No metrics defined. Use "View Framework" above to load predefined metrics.</p>
-        )}
-        <div className="space-y-3">
-          {config.metrics.map((m, i) => (
-            <div key={m.id} className="border border-moove-border rounded-2xl p-4">
-              <div className="flex justify-between mb-2">
-                <span className="text-xs font-bold text-moove-orange">Metric {i + 1}</span>
-                <button onClick={() => removeMetric(m.id)} className="text-red-400 text-xs hover:text-red-600">✕</button>
-              </div>
-              <div className="grid sm:grid-cols-2 gap-2">
-                <input value={m.name} onChange={e => updateMetric(m.id, 'name', e.target.value)}
-                  placeholder="Metric name" className={inputCls} />
-                <input value={m.description} onChange={e => updateMetric(m.id, 'description', e.target.value)}
-                  placeholder="Description" className={inputCls} />
-                <input value={m.target} onChange={e => updateMetric(m.id, 'target', e.target.value)}
-                  placeholder="Target value (e.g. 4/5)" className={inputCls} />
-                <input value={m.threshold} onChange={e => updateMetric(m.id, 'threshold', e.target.value)}
-                  placeholder="Success threshold (e.g. ≥ 80%)" className={inputCls} />
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <button onClick={handleSave}
-        className="w-full py-3.5 rounded-2xl font-bold text-white text-sm transition-all active:scale-95"
-        style={{ background: saved ? '#22C55E' : 'linear-gradient(135deg,#F97316,#FBBF24)' }}>
-        {saved ? '✓ Saved!' : 'Save Testing Configuration'}
-      </button>
-    </div>
-  )
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
 }
 
-// ─── Tab: Overview ────────────────────────────────────────────────────────────
-
-function OverviewTab({ data }: { data: FeedbackEntry[] }) {
-  const config = useMemo(loadConfig, [])
-  const n = data.length
-  const target = config.targetParticipants
-
-  const avgRating    = avg(data.map(f => f.overallRating))
-  const avgImpression= avg(data.map(f => f.firstImpression))
-  const avgEaseNav   = avg(data.map(f => f.easeOfNavigation))
-  const avgEaseLearn = avg(data.map(f => f.easeOfLearning))
-  const ousScore     = n > 0 ? Math.round(((avgRating + avgImpression + avgEaseNav + avgEaseLearn) / 4) * 10) / 10 : 0
-  const avgSat = ousScore
-  const recRate      = pct(data.filter(f => f.wouldRecommend === 'yes').length, n)
-  const successRate  = pct(data.filter(f => f.accomplishedTask === 'yes').length, n)
-  const userSuccessRate = pct(data.filter(f => f.accomplishedTask === 'yes' || f.accomplishedTask === 'partially').length, n)
-  const completionRate = pct(data.filter(f => f.completionStatus === 'completed').length, n || 1)
-  const useAgainRate = pct(data.filter(f => f.wouldUseAgain === 'yes').length, n)
-  const bugFreeRate  = pct(data.filter(f => !f.bugReport).length, n)
-
-  // Pass/fail scorecard — thresholds from predefined framework
-  const scorecard = [
-    { label: 'Overall Satisfaction', value: avgRating,    unit: '/5', pass: avgRating >= 3.5,    target: '≥ 4.0', threshold: '≥ 3.5' },
-    { label: 'First Impression',     value: avgImpression, unit: '/5', pass: avgImpression >= 3.5, target: '≥ 4.0', threshold: '≥ 3.5' },
-    { label: 'Ease of Navigation',   value: avgEaseNav,   unit: '/5', pass: avgEaseNav >= 3.5,   target: '≥ 4.0', threshold: '≥ 3.5' },
-    { label: 'Ease of Learning',     value: avgEaseLearn, unit: '/5', pass: avgEaseLearn >= 3.5, target: '≥ 4.0', threshold: '≥ 3.5' },
-    { label: 'OUS Composite',        value: ousScore,     unit: '/5', pass: ousScore >= 3.5,     target: '≥ 4.0', threshold: '≥ 3.5' },
-    { label: 'Task Completion',      value: successRate,  unit: '%',  pass: successRate >= 70,   target: '≥ 80%', threshold: '≥ 70%' },
-    { label: 'Retention Intent',     value: useAgainRate, unit: '%',  pass: useAgainRate >= 60,  target: '≥ 75%', threshold: '≥ 60%' },
-    { label: 'Recommendation Rate',  value: recRate,      unit: '%',  pass: recRate >= 60,       target: '≥ 70%', threshold: '≥ 60%' },
-    { label: 'Bug-Free Rate',        value: bugFreeRate,  unit: '%',  pass: bugFreeRate >= 70,   target: '≥ 80%', threshold: '≥ 70%' },
-  ]
-  const passCount = n > 0 ? scorecard.filter(s => s.pass).length : 0
-
-  if (n === 0) return (
-    <div className="bg-white rounded-2xl p-12 card-shadow text-center">
-      <div className="text-5xl mb-4">📋</div>
-      <div className="font-display font-bold text-xl text-moove-brown mb-2">No Feedback Yet</div>
-      <p className="text-sm text-moove-muted">Driver feedback will appear here once participants complete the survey.</p>
-    </div>
-  )
-
-  return (
-    <div className="space-y-5">
-      {/* Progress toward target */}
-      <div className="bg-white rounded-2xl p-5 card-shadow">
-        <div className="flex justify-between items-center mb-2">
-          <SectionHeader>Participation Progress</SectionHeader>
-          <span className="text-xs font-black text-moove-orange">{n} / {target} participants</span>
-        </div>
-        <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
-          <div className="h-full bg-moove-orange rounded-full transition-all duration-700"
-            style={{ width: `${Math.min(100, pct(n, target))}%` }} />
-        </div>
-        <div className="text-xs text-moove-muted mt-1 text-right">{pct(n, target)}% of target reached</div>
-      </div>
-
-      {/* Executive summary */}
-      <div>
-        <SectionHeader>Executive Summary</SectionHeader>
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-          <StatCard icon="👥" label="Participants" value={String(n)} color="#F97316" />
-          <StatCard icon="⭐" label="Avg Rating" value={`${avgRating}/5`} color="#FBBF24" />
-          <StatCard icon="🧮" label="OUS Composite" value={`${ousScore}/5`} color="#22C55E" sub="Overall User Satisfaction" />
-          <StatCard icon="📢" label="Recommend Rate" value={`${recRate}%`} color="#0EA5E9" />
-          <StatCard icon="✅" label="Task Completion" value={`${successRate}%`} color="#22C55E" />
-          <StatCard icon="🔄" label="Would Use Again" value={`${useAgainRate}%`} color="#A855F7" />
-        </div>
-      </div>
-
-      {/* Validation Scorecard */}
-      <div className="bg-white rounded-2xl p-5 card-shadow">
-        <div className="flex items-center justify-between mb-3">
-          <SectionHeader>Validation Scorecard — Pass / Fail</SectionHeader>
-          {n > 0 && (
-            <span className={`text-xs font-black px-2.5 py-1 rounded-full ${passCount === scorecard.length ? 'bg-green-100 text-green-700' : passCount >= scorecard.length * 0.7 ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'}`}>
-              {passCount}/{scorecard.length} PASSED
-            </span>
-          )}
-        </div>
-        <div className="space-y-2">
-          {scorecard.map(s => {
-            const display = s.unit === '/5' ? `${(s.value as number).toFixed(1)}${s.unit}` : `${s.value}${s.unit}`
-            const color = n === 0 ? '#D1D5DB' : s.pass ? '#22C55E' : '#EF4444'
-            const pctBar = s.unit === '/5' ? ((s.value as number) / 5) * 100 : Math.min(100, s.value as number)
-            return (
-              <div key={s.label} className="flex items-center gap-3">
-                <div className="w-2 h-2 rounded-full shrink-0" style={{ background: color }} />
-                <div className="text-xs text-moove-brown font-semibold w-40 shrink-0 truncate">{s.label}</div>
-                <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
-                  <div className="h-full rounded-full transition-all duration-700" style={{ width: `${n > 0 ? pctBar : 0}%`, background: color }} />
-                </div>
-                <div className="text-xs font-black w-12 text-right" style={{ color }}>{n > 0 ? display : '—'}</div>
-                <div className="text-[10px] text-moove-muted w-16 text-right shrink-0">{n > 0 ? (s.pass ? '✓ PASS' : '✗ FAIL') : s.threshold}</div>
-              </div>
-            )
-          })}
-        </div>
-        {n > 0 && (
-          <div className={`mt-4 p-3 rounded-xl text-xs font-semibold text-center ${passCount === scorecard.length ? 'bg-green-50 text-green-700 border border-green-200' : passCount >= scorecard.length * 0.7 ? 'bg-amber-50 text-amber-700 border border-amber-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
-            {passCount === scorecard.length ? '🎉 All KPIs passed — prototype meets TRL 4 validation criteria.' : passCount >= Math.ceil(scorecard.length * 0.7) ? `⚠ ${passCount} of ${scorecard.length} KPIs passed — prototype partially meets criteria. Address failing metrics before next iteration.` : `❌ Only ${passCount} of ${scorecard.length} KPIs passed — significant improvements required before re-testing.`}
-          </div>
-        )}
-      </div>
-
-      {/* Rating breakdown */}
-      <div className="bg-white rounded-2xl p-5 card-shadow">
-        <SectionHeader>Rating Breakdown</SectionHeader>
-        <RatingBar label="Overall Rating" value={avgRating} color="#F97316" />
-        <RatingBar label="First Impression" value={avgImpression} color="#FBBF24" />
-        <RatingBar label="Ease of Navigation" value={avgEaseNav} color="#0EA5E9" />
-        <RatingBar label="Ease of Learning" value={avgEaseLearn} color="#A855F7" />
-        <RatingBar label="OUS Composite" value={ousScore} color="#22C55E" />
-      </div>
-
-      {/* Intent */}
-      <div className="bg-white rounded-2xl p-5 card-shadow">
-        <SectionHeader>User Intent</SectionHeader>
-        <div className="grid grid-cols-3 gap-4">
-          {[
-            { label: 'Would Use Again', key: 'wouldUseAgain' as keyof FeedbackEntry, icon: '🔄', color: '#22C55E' },
-            { label: 'Would Recommend', key: 'wouldRecommend' as keyof FeedbackEntry, icon: '📢', color: '#0EA5E9' },
-            { label: 'Task Accomplished', key: 'accomplishedTask' as keyof FeedbackEntry, icon: '✅', color: '#A855F7' },
-          ].map(s => {
-            const yes = data.filter(f => f[s.key] === 'yes').length
-            return (
-              <div key={s.label} className="text-center">
-                <div className="text-2xl mb-1">{s.icon}</div>
-                <div className="font-display font-black text-xl" style={{ color: s.color }}>{yes}/{n}</div>
-                <div className="text-xs text-moove-muted mb-1">{s.label}</div>
-                <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                  <div className="h-full rounded-full" style={{ width: `${pct(yes, n)}%`, background: s.color }} />
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      </div>
-
-      {/* Config assumptions scorecard */}
-      {config.assumptions.length > 0 && (
-        <div className="bg-white rounded-2xl p-5 card-shadow">
-          <SectionHeader>Assumption Validation Status</SectionHeader>
-          <div className="space-y-3">
-            {config.assumptions.map((a, i) => (
-              <div key={a.id} className="border border-moove-border rounded-xl p-3">
-                <div className="text-xs font-bold text-moove-orange mb-1">Assumption {i + 1}</div>
-                <div className="text-sm text-moove-brown mb-1">{a.text || '—'}</div>
-                <div className="flex gap-3 text-xs text-moove-muted">
-                  <span>Metric: <strong>{a.metric || '—'}</strong></span>
-                  <span>Target: <strong>{a.successCriteria || '—'}</strong></span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  )
+function toNumber(value: unknown, fallback: number): number {
+  const parsed = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(parsed) ? parsed : fallback
 }
 
-// ─── Tab: Insights ────────────────────────────────────────────────────────────
-
-function InsightsTab({ data }: { data: FeedbackEntry[] }) {
-  if (data.length === 0) return (
-    <div className="bg-white rounded-2xl p-10 card-shadow text-center text-sm text-moove-muted">No feedback to analyze yet.</div>
-  )
-
-  const topUseful = mode(data.map(f => f.mostUsefulFeature))
-  const topImprove = mode(data.map(f => f.needsImprovement))
-  const topFeatureReq = mode(data.map(f => f.featureRequest).filter(Boolean))
-  const confusingResponses = data.map(f => f.confusingPart).filter(Boolean)
-  const positiveComments = data.map(f => f.additionalComments).filter(Boolean)
-  const bugs = data.map(f => f.bugReport).filter(Boolean)
-
-  const InsightCard = ({ emoji, title, color, children }: { emoji: string; title: string; color: string; children: React.ReactNode }) => (
-    <div className="bg-white rounded-2xl p-5 card-shadow">
-      <div className="flex items-center gap-2 mb-3">
-        <span className="text-xl">{emoji}</span>
-        <div className="text-xs font-black tracking-widest" style={{ color }}>{title}</div>
-      </div>
-      {children}
-    </div>
-  )
-
-  return (
-    <div className="space-y-4">
-      <InsightCard emoji="🏆" title="HIGHEST-RATED FEATURE" color="#22C55E">
-        {topUseful.length === 0 ? <p className="text-sm text-moove-muted">No data yet.</p> : (
-          <div className="space-y-2">
-            {topUseful.slice(0, 3).map(([feature, count]) => (
-              <div key={feature} className="flex items-center justify-between">
-                <span className="text-sm font-semibold text-moove-brown">{feature}</span>
-                <span className="text-xs font-black text-green-600 bg-green-50 px-2 py-0.5 rounded-full">{count} votes</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </InsightCard>
-
-      <InsightCard emoji="🔧" title="MOST NEEDS IMPROVEMENT" color="#F97316">
-        {topImprove.length === 0 ? <p className="text-sm text-moove-muted">No data yet.</p> : (
-          <div className="space-y-2">
-            {topImprove.slice(0, 3).map(([feature, count]) => (
-              <div key={feature} className="flex items-center justify-between">
-                <span className="text-sm font-semibold text-moove-brown">{feature}</span>
-                <span className="text-xs font-black text-orange-600 bg-orange-50 px-2 py-0.5 rounded-full">{count} mentions</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </InsightCard>
-
-      <InsightCard emoji="💡" title="MOST REQUESTED FEATURE" color="#A855F7">
-        {topFeatureReq.length === 0 ? <p className="text-sm text-moove-muted">No feature requests yet.</p> : (
-          <div className="space-y-2">
-            {topFeatureReq.slice(0, 3).map(([req, count]) => (
-              <div key={req} className="flex items-start gap-3">
-                <span className="text-xs font-black text-purple-600 bg-purple-50 px-2 py-0.5 rounded-full shrink-0">{count}×</span>
-                <span className="text-sm text-moove-brown">{req}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </InsightCard>
-
-      <InsightCard emoji="😵" title="MOST CONFUSING WORKFLOWS" color="#EF4444">
-        {confusingResponses.length === 0 ? <p className="text-sm text-moove-muted">No confusion reported.</p> : (
-          <div className="space-y-2 max-h-48 overflow-y-auto">
-            {confusingResponses.slice(0, 5).map((text, i) => (
-              <div key={i} className="text-xs text-moove-brown bg-red-50 rounded-xl p-2 border border-red-100">{text}</div>
-            ))}
-          </div>
-        )}
-      </InsightCard>
-
-      <InsightCard emoji="👍" title="POSITIVE FEEDBACK HIGHLIGHTS" color="#22C55E">
-        {positiveComments.length === 0 ? <p className="text-sm text-moove-muted">No comments yet.</p> : (
-          <div className="space-y-2 max-h-48 overflow-y-auto">
-            {positiveComments.slice(0, 5).map((text, i) => (
-              <div key={i} className="text-xs text-moove-brown bg-green-50 rounded-xl p-2 border border-green-100">"{text}"</div>
-            ))}
-          </div>
-        )}
-      </InsightCard>
-
-      {bugs.length > 0 && (
-        <InsightCard emoji="🐛" title="BUG REPORTS" color="#EF4444">
-          <div className="space-y-2 max-h-48 overflow-y-auto">
-            {bugs.map((text, i) => (
-              <div key={i} className="text-xs text-red-700 bg-red-50 rounded-xl p-2 border border-red-100">{text}</div>
-            ))}
-          </div>
-        </InsightCard>
-      )}
-    </div>
-  )
+function normalizeMetricType(value: unknown, fallback: MetricType): MetricType {
+  if (value === 'rating' || value === 'percent') return value
+  return fallback
 }
 
-// ─── Tab: Classification ──────────────────────────────────────────────────────
-
-const DESIRABILITY = ['User Satisfaction', 'Ease of Use', 'Interface Design', 'User Experience', 'Visual Appeal']
-const FEASIBILITY = ['Bugs', 'Technical Issues', 'Performance', 'Missing Features', 'Reliability']
-const VIABILITY = ['Long-term Usage', 'Adoption Potential', 'Sustainability', 'Deployment Readiness', 'Maintenance']
-
-function ClassificationTab({ data }: { data: FeedbackEntry[] }) {
-  const computeScore = (type: 'desirability' | 'feasibility' | 'viability') => {
-    if (!data.length) return 0
-    if (type === 'desirability') return avg(data.map(f => (f.overallRating + f.firstImpression + f.easeOfNavigation) / 3))
-    if (type === 'feasibility') return avg(data.map(f => {
-      const bugs = f.bugReport ? 2 : 5
-      return (f.easeOfLearning + f.easeOfNavigation + bugs) / 3
-    }))
-    if (type === 'viability') return avg(data.map(f => {
-      const rec = f.wouldRecommend === 'yes' ? 5 : f.wouldRecommend === 'maybe' ? 3 : 1
-      const use = f.wouldUseAgain === 'yes' ? 5 : f.wouldUseAgain === 'maybe' ? 3 : 1
-      return (rec + use) / 2
-    }))
-    return 0
-  }
-
-  const categories = [
-    { key: 'desirability' as const, label: 'Desirability', icon: '❤️', color: '#F97316', subcategories: DESIRABILITY, score: computeScore('desirability') },
-    { key: 'feasibility' as const, label: 'Feasibility', icon: '⚙️', color: '#0EA5E9', subcategories: FEASIBILITY, score: computeScore('feasibility') },
-    { key: 'viability' as const, label: 'Viability', icon: '📈', color: '#22C55E', subcategories: VIABILITY, score: computeScore('viability') },
-  ]
-
-  return (
-    <div className="space-y-4">
-      {categories.map(cat => (
-        <div key={cat.key} className="bg-white rounded-2xl p-5 card-shadow">
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <span className="text-xl">{cat.icon}</span>
-              <div className="text-xs font-black tracking-widest" style={{ color: cat.color }}>{cat.label.toUpperCase()}</div>
-            </div>
-            {data.length > 0 && (
-              <div className="text-sm font-black" style={{ color: cat.color }}>{cat.score.toFixed(1)}/5</div>
-            )}
-          </div>
-          {data.length > 0 && (
-            <div className="h-2 bg-gray-100 rounded-full overflow-hidden mb-4">
-              <div className="h-full rounded-full transition-all duration-700"
-                style={{ width: `${(cat.score / 5) * 100}%`, background: cat.color }} />
-            </div>
-          )}
-          <div className="flex flex-wrap gap-1.5">
-            {cat.subcategories.map(sub => (
-              <span key={sub} className="text-xs font-semibold px-2.5 py-1 rounded-full border"
-                style={{ color: cat.color, borderColor: `${cat.color}40`, background: `${cat.color}10` }}>
-                {sub}
-              </span>
-            ))}
-          </div>
-          {data.length === 0 && (
-            <p className="text-xs text-moove-muted mt-3">Scores will appear once feedback is collected.</p>
-          )}
-        </div>
-      ))}
-    </div>
-  )
-}
-
-// ─── Tab: Action Plan ─────────────────────────────────────────────────────────
-
-function ActionPlanTab() {
-  const [items, setItems] = useState<ActionItem[]>(loadActions)
-  const [showForm, setShowForm] = useState(false)
-  const [form, setForm] = useState<Omit<ActionItem, 'id'>>({
-    issue: '', priority: 'High', suggestedSolution: '', status: 'Open', retestRequired: false,
+function normalizeAssumptions(raw: unknown, metrics: EvaluationMetric[]): ValidationAssumption[] {
+  const options = Array.isArray(raw) ? raw : []
+  const metricKeys = new Set(metrics.map(metric => metric.key))
+  return PREDEFINED_ASSUMPTIONS.map((fallback, index) => {
+    const candidate = options[index]
+    if (!isObject(candidate)) return { ...fallback }
+    const metricCandidate = typeof candidate.metricKey === 'string' ? (candidate.metricKey as MetricKey) : fallback.metricKey
+    return {
+      id: typeof candidate.id === 'string' ? candidate.id : fallback.id,
+      title: typeof candidate.title === 'string' ? candidate.title : fallback.title,
+      description: typeof candidate.description === 'string' ? candidate.description : fallback.description,
+      metricKey: metricKeys.has(metricCandidate) ? metricCandidate : fallback.metricKey,
+      targetLabel: typeof candidate.targetLabel === 'string' ? candidate.targetLabel : fallback.targetLabel,
+      targetType: normalizeMetricType(candidate.targetType, fallback.targetType),
+      targetValue: toNumber(candidate.targetValue, fallback.targetValue),
+      icon: typeof candidate.icon === 'string' ? candidate.icon : fallback.icon,
+    }
   })
-
-  const save = (updated: ActionItem[]) => { setItems(updated); saveActions(updated) }
-  const addItem = () => {
-    if (!form.issue.trim()) return
-    save([...items, { ...form, id: Date.now().toString() }])
-    setForm({ issue: '', priority: 'High', suggestedSolution: '', status: 'Open', retestRequired: false })
-    setShowForm(false)
-  }
-  const updateStatus = (id: string, status: ActionItem['status']) =>
-    save(items.map(i => i.id === id ? { ...i, status } : i))
-  const remove = (id: string) => save(items.filter(i => i.id !== id))
-
-  const priorityColor = { High: '#EF4444', Medium: '#FBBF24', Low: '#22C55E' }
-  const statusColor = { Open: '#F97316', 'In Progress': '#0EA5E9', Done: '#22C55E' }
-  const inputCls = "w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-moove-brown focus:outline-none focus:border-moove-orange"
-
-  return (
-    <div className="space-y-4">
-      <div className="flex justify-between items-center">
-        <span className="text-sm text-moove-muted">{items.length} action{items.length !== 1 ? 's' : ''} tracked</span>
-        <button onClick={() => setShowForm(v => !v)}
-          className="px-4 py-2 rounded-xl bg-moove-orange text-white text-xs font-bold">
-          + Add Action
-        </button>
-      </div>
-
-      {showForm && (
-        <div className="bg-white rounded-2xl p-5 card-shadow space-y-3">
-          <SectionHeader>New Action Item</SectionHeader>
-          <textarea rows={2} value={form.issue} onChange={e => setForm(f => ({ ...f, issue: e.target.value }))}
-            placeholder="Issue description..." className={`${inputCls} resize-none`} />
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="text-xs font-semibold text-moove-brown mb-1 block">Priority</label>
-              <select value={form.priority} onChange={e => setForm(f => ({ ...f, priority: e.target.value as ActionItem['priority'] }))} className={inputCls}>
-                {(['High', 'Medium', 'Low'] as const).map(p => <option key={p} value={p}>{p}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="text-xs font-semibold text-moove-brown mb-1 block">Status</label>
-              <select value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value as ActionItem['status'] }))} className={inputCls}>
-                {(['Open', 'In Progress', 'Done'] as const).map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </div>
-          </div>
-          <textarea rows={2} value={form.suggestedSolution} onChange={e => setForm(f => ({ ...f, suggestedSolution: e.target.value }))}
-            placeholder="Suggested solution..." className={`${inputCls} resize-none`} />
-          <label className="flex items-center gap-2 text-sm text-moove-brown cursor-pointer">
-            <input type="checkbox" checked={form.retestRequired}
-              onChange={e => setForm(f => ({ ...f, retestRequired: e.target.checked }))}
-              className="w-4 h-4 accent-orange-500" />
-            Retest Required
-          </label>
-          <div className="flex gap-2">
-            <button onClick={() => setShowForm(false)} className="flex-1 py-2 rounded-xl border border-gray-200 text-sm text-moove-muted">Cancel</button>
-            <button onClick={addItem} className="flex-1 py-2 rounded-xl bg-moove-orange text-white text-sm font-bold">Add</button>
-          </div>
-        </div>
-      )}
-
-      {items.length === 0 && !showForm ? (
-        <div className="bg-white rounded-2xl p-10 card-shadow text-center">
-          <div className="text-4xl mb-3">📋</div>
-          <p className="text-sm text-moove-muted">No action items yet. Add issues identified from feedback analysis.</p>
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {items.map(item => (
-            <div key={item.id} className="bg-white rounded-2xl p-4 card-shadow">
-              <div className="flex justify-between items-start mb-2">
-                <div className="flex gap-2">
-                  <span className="text-xs font-black px-2 py-0.5 rounded-full text-white" style={{ background: priorityColor[item.priority] }}>{item.priority}</span>
-                  <span className="text-xs font-bold px-2 py-0.5 rounded-full border" style={{ color: statusColor[item.status], borderColor: `${statusColor[item.status]}40`, background: `${statusColor[item.status]}10` }}>{item.status}</span>
-                  {item.retestRequired && <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-purple-50 text-purple-600 border border-purple-100">Retest</span>}
-                </div>
-                <button onClick={() => remove(item.id)} className="text-red-400 text-xs hover:text-red-600">✕</button>
-              </div>
-              <div className="text-sm font-semibold text-moove-brown mb-1">{item.issue}</div>
-              {item.suggestedSolution && <div className="text-xs text-moove-muted mb-2">→ {item.suggestedSolution}</div>}
-              <div className="flex gap-1.5">
-                {(['Open', 'In Progress', 'Done'] as const).map(s => (
-                  <button key={s} onClick={() => updateStatus(item.id, s)}
-                    className={`text-xs px-2.5 py-1 rounded-lg font-semibold border transition-all ${item.status === s ? 'text-white border-transparent' : 'border-gray-200 text-moove-muted hover:border-moove-orange'}`}
-                    style={item.status === s ? { background: statusColor[s] } : undefined}>{s}</button>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  )
 }
 
-// ─── Tab: Iterations ──────────────────────────────────────────────────────────
-
-function IterationsTab() {
-  const [items, setItems] = useState<Iteration[]>(loadIterations)
-  const [showForm, setShowForm] = useState(false)
-  const [form, setForm] = useState<Omit<Iteration, 'id'>>({
-    version: '', testingCycle: '', improvementsMade: '', retestingStatus: 'Pending',
+function normalizeMetrics(raw: unknown): EvaluationMetric[] {
+  const options = Array.isArray(raw) ? raw : []
+  return PREDEFINED_METRICS.map((fallback, index) => {
+    const candidate = options[index]
+    if (typeof candidate === 'string') {
+      return { ...fallback, name: candidate }
+    }
+    if (!isObject(candidate)) return { ...fallback }
+    return {
+      id: typeof candidate.id === 'string' ? candidate.id : fallback.id,
+      key: typeof candidate.key === 'string' ? (candidate.key as MetricKey) : fallback.key,
+      name: typeof candidate.name === 'string' ? candidate.name : fallback.name,
+      description: typeof candidate.description === 'string' ? candidate.description : fallback.description,
+      formula: typeof candidate.formula === 'string' ? candidate.formula : fallback.formula,
+      targetLabel: typeof candidate.targetLabel === 'string' ? candidate.targetLabel : fallback.targetLabel,
+      passThresholdLabel: typeof candidate.passThresholdLabel === 'string' ? candidate.passThresholdLabel : fallback.passThresholdLabel,
+      targetType: normalizeMetricType(candidate.targetType, fallback.targetType),
+      targetValue: toNumber(candidate.targetValue, fallback.targetValue),
+      passThreshold: toNumber(candidate.passThreshold, fallback.passThreshold),
+      icon: typeof candidate.icon === 'string' ? candidate.icon : fallback.icon,
+    }
   })
-
-  const save = (updated: Iteration[]) => { setItems(updated); saveIterations(updated) }
-  const addItem = () => {
-    if (!form.version.trim()) return
-    save([...items, { ...form, id: Date.now().toString() }])
-    setForm({ version: '', testingCycle: '', improvementsMade: '', retestingStatus: 'Pending' })
-    setShowForm(false)
-  }
-  const remove = (id: string) => save(items.filter(i => i.id !== id))
-  const inputCls = "w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-moove-brown focus:outline-none focus:border-moove-orange"
-  const statusColor = { Pending: '#FBBF24', 'In Progress': '#0EA5E9', Complete: '#22C55E' }
-
-  return (
-    <div className="space-y-4">
-      <div className="flex justify-between items-center">
-        <span className="text-sm text-moove-muted">{items.length} iteration{items.length !== 1 ? 's' : ''}</span>
-        <button onClick={() => setShowForm(v => !v)}
-          className="px-4 py-2 rounded-xl bg-moove-orange text-white text-xs font-bold">
-          + Add Iteration
-        </button>
-      </div>
-
-      {showForm && (
-        <div className="bg-white rounded-2xl p-5 card-shadow space-y-3">
-          <SectionHeader>New Prototype Iteration</SectionHeader>
-          <div className="grid sm:grid-cols-2 gap-2">
-            <div>
-              <label className="text-xs font-semibold text-moove-brown mb-1 block">Prototype Version</label>
-              <input value={form.version} onChange={e => setForm(f => ({ ...f, version: e.target.value }))} placeholder="e.g. v1.1.0-TRL4" className={inputCls} />
-            </div>
-            <div>
-              <label className="text-xs font-semibold text-moove-brown mb-1 block">Testing Cycle</label>
-              <input value={form.testingCycle} onChange={e => setForm(f => ({ ...f, testingCycle: e.target.value }))} placeholder="e.g. UNLEASH Round 2" className={inputCls} />
-            </div>
-          </div>
-          <div>
-            <label className="text-xs font-semibold text-moove-brown mb-1 block">Improvements Made</label>
-            <textarea rows={3} value={form.improvementsMade} onChange={e => setForm(f => ({ ...f, improvementsMade: e.target.value }))}
-              placeholder="List the changes and improvements applied in this iteration..."
-              className={`${inputCls} resize-none`} />
-          </div>
-          <div>
-            <label className="text-xs font-semibold text-moove-brown mb-1 block">Retesting Status</label>
-            <select value={form.retestingStatus} onChange={e => setForm(f => ({ ...f, retestingStatus: e.target.value as Iteration['retestingStatus'] }))} className={inputCls}>
-              {(['Pending', 'In Progress', 'Complete'] as const).map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
-          </div>
-          <div className="flex gap-2">
-            <button onClick={() => setShowForm(false)} className="flex-1 py-2 rounded-xl border border-gray-200 text-sm text-moove-muted">Cancel</button>
-            <button onClick={addItem} className="flex-1 py-2 rounded-xl bg-moove-orange text-white text-sm font-bold">Add</button>
-          </div>
-        </div>
-      )}
-
-      {items.length === 0 && !showForm ? (
-        <div className="bg-white rounded-2xl p-10 card-shadow text-center">
-          <div className="text-4xl mb-3">🔄</div>
-          <p className="text-sm text-moove-muted">No iterations logged yet. Track each prototype version and testing cycle here.</p>
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {items.map((item, idx) => (
-            <div key={item.id} className="bg-white rounded-2xl p-4 card-shadow">
-              <div className="flex justify-between items-start mb-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-black text-moove-orange bg-orange-50 px-2 py-0.5 rounded-full">v{item.version}</span>
-                  <span className="text-xs text-moove-muted">{item.testingCycle}</span>
-                  <span className="text-xs font-bold px-2 py-0.5 rounded-full border"
-                    style={{ color: statusColor[item.retestingStatus], borderColor: `${statusColor[item.retestingStatus]}40`, background: `${statusColor[item.retestingStatus]}10` }}>
-                    {item.retestingStatus}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-moove-muted">#{idx + 1}</span>
-                  <button onClick={() => remove(item.id)} className="text-red-400 text-xs hover:text-red-600">✕</button>
-                </div>
-              </div>
-              {item.improvementsMade && (
-                <div className="text-xs text-moove-brown bg-moove-cream rounded-xl p-2.5 leading-relaxed">{item.improvementsMade}</div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  )
 }
 
-// ─── Tab: Export ──────────────────────────────────────────────────────────────
-
-function ExportTab({ data }: { data: FeedbackEntry[] }) {
-  const config = useMemo(loadConfig, [])
-  const actions = useMemo(loadActions, [])
-  const n = data.length
-
-  const exportCSV = () => {
-    const headers = [
-      'ID', 'Driver ID', 'Testing Session', 'Date', 'Time', 'Device', 'Browser', 'App Version',
-      'Overall Rating', 'First Impression', 'Ease of Navigation', 'Ease of Learning',
-      'Accomplished Task', 'Most Useful Feature', 'Needs Improvement', 'Confusing Part',
-      'Bug Report', 'Would Use Again', 'Would Recommend', 'Additional Comments',
-      'Feature Request', 'Submitted At',
-    ]
-    const rows = data.map(f => [
-      f.id, f.driverId, f.testingSessionId, f.date, f.time, f.device, f.browser, f.appVersion,
-      f.overallRating, f.firstImpression, f.easeOfNavigation, f.easeOfLearning,
-      f.accomplishedTask, f.mostUsefulFeature, f.needsImprovement, f.confusingPart,
-      f.bugReport, f.wouldUseAgain, f.wouldRecommend, f.additionalComments,
-      f.featureRequest, f.submittedAt,
-    ])
-    const csv = [headers, ...rows].map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n')
-    const blob = new Blob([csv], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url; a.download = `moove_unleash_feedback_${new Date().toISOString().slice(0, 10)}.csv`
-    a.click(); URL.revokeObjectURL(url)
-  }
-
-  const exportReport = () => {
-    const avgRating = n > 0 ? (data.reduce((s, f) => s + f.overallRating, 0) / n).toFixed(1) : '—'
-    const recRate = n > 0 ? `${Math.round((data.filter(f => f.wouldRecommend === 'yes').length / n) * 100)}%` : '—'
-    const successRate = n > 0 ? `${Math.round((data.filter(f => f.accomplishedTask === 'yes').length / n) * 100)}%` : '—'
-    const topFeature = mode(data.map(f => f.mostUsefulFeature))[0]?.[0] ?? '—'
-    const topImprove = mode(data.map(f => f.needsImprovement))[0]?.[0] ?? '—'
-
-    const text = `MOOVE PROTOTYPE — UNLEASH TESTING REPORT
-TRL 4 Evidence Document
-Generated: ${new Date().toLocaleString()}
-
-═══════════════════════════════════════════════
-TESTING CONFIGURATION
-═══════════════════════════════════════════════
-Testing Method:  ${data[0]?.testingMethod ?? 'User Feedback Survey (In-App Feedback Module)'}
-Session ID:      ${config.sessionId}
-Prototype:       ${config.prototypeVersion}
-Objective:       ${config.testingObjective || '—'}
-User Group:      ${config.userGroup || '—'}
-Environment:     ${config.environment || '—'}
-Start Date:      ${config.startDate || '—'}
-Target Size:     ${config.targetParticipants} participants
-Success Criteria:${config.successCriteria || '—'}
-
-═══════════════════════════════════════════════
-EXECUTIVE SUMMARY
-═══════════════════════════════════════════════
-Total Participants:    ${n}
-Average Rating:        ${avgRating} / 5
-Recommendation Rate:   ${recRate}
-User Success Rate:     ${successRate}
-Highest-Rated Feature: ${topFeature}
-Most Flagged Feature:  ${topImprove}
-
-═══════════════════════════════════════════════
-ASSUMPTIONS
-═══════════════════════════════════════════════
-${config.assumptions.length === 0 ? '(No assumptions defined)' : config.assumptions.map((a, i) => `${i + 1}. ${a.text}\n   Metric: ${a.metric}\n   Success: ${a.successCriteria}`).join('\n\n')}
-
-═══════════════════════════════════════════════
-ACTION PLAN
-═══════════════════════════════════════════════
-${actions.length === 0 ? '(No action items)' : actions.map((a, i) => `${i + 1}. [${a.priority}] ${a.issue}\n   Solution: ${a.suggestedSolution}\n   Status: ${a.status} | Retest: ${a.retestRequired ? 'Yes' : 'No'}`).join('\n\n')}
-
-═══════════════════════════════════════════════
-END OF REPORT
-═══════════════════════════════════════════════
-`
-    const blob = new Blob([text], { type: 'text/plain' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url; a.download = `moove_trl4_report_${new Date().toISOString().slice(0, 10)}.txt`
-    a.click(); URL.revokeObjectURL(url)
-  }
-
-  return (
-    <div className="space-y-4">
-      <div className="bg-white rounded-2xl p-5 card-shadow">
-        <SectionHeader>Export Testing Evidence</SectionHeader>
-        <p className="text-xs text-moove-muted mb-5">
-          Download testing data suitable as evidence for <strong>UNLEASH Testing</strong> and <strong>TRL 4 documentation</strong>.
-        </p>
-        <div className="space-y-3">
-          <button onClick={exportCSV} disabled={n === 0}
-            className="w-full flex items-center gap-3 p-4 rounded-2xl border-2 border-moove-orange text-moove-orange hover:bg-orange-50 transition-all disabled:opacity-40 disabled:cursor-not-allowed">
-            <span className="text-2xl">📊</span>
-            <div className="text-left">
-              <div className="font-bold text-sm">Export Feedback Data — CSV</div>
-              <div className="text-xs opacity-70">{n} submission{n !== 1 ? 's' : ''} · all raw responses and metadata</div>
-            </div>
-          </button>
-          <button onClick={exportReport}
-            className="w-full flex items-center gap-3 p-4 rounded-2xl border-2 border-blue-300 text-blue-700 hover:bg-blue-50 transition-all">
-            <span className="text-2xl">📄</span>
-            <div className="text-left">
-              <div className="font-bold text-sm">Export TRL 4 Evidence Report — TXT</div>
-              <div className="text-xs opacity-70">Testing config · executive summary · assumptions · action plan</div>
-            </div>
-          </button>
-        </div>
-      </div>
-
-      <div className="bg-white rounded-2xl p-5 card-shadow">
-        <SectionHeader>Report Includes</SectionHeader>
-        <div className="grid grid-cols-2 gap-1.5">
-          {[
-            'Testing Configuration', 'Participant Summary', 'Executive Summary',
-            'Rating Breakdown', 'Recommendation Rate', 'User Success Rate',
-            'Top Insights', 'Feature Analysis', 'Assumption Tracking',
-            'Action Plan', 'Prototype Version', 'Testing Cycle',
-          ].map(item => (
-            <div key={item} className="flex items-center gap-2 text-xs text-moove-brown">
-              <span className="text-green-500 font-bold">✓</span> {item}
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  )
+function average(values: Array<number | null>) {
+  const valid = values.filter((value): value is number => typeof value === 'number' && value > 0)
+  return valid.length > 0 ? valid.reduce((sum, value) => sum + value, 0) / valid.length : 0
 }
 
-// ─── Main Component ───────────────────────────────────────────────────────────
+function percent(numerator: number, denominator: number) {
+  return denominator > 0 ? Math.round((numerator / denominator) * 100) : 0
+}
 
-const TABS = [
-  { id: 'setup', label: 'Setup', icon: '⚙️' },
-  { id: 'overview', label: 'Overview', icon: '📊' },
-  { id: 'insights', label: 'Insights', icon: '💡' },
-  { id: 'classification', label: 'Classification', icon: '🗂️' },
-  { id: 'actions', label: 'Action Plan', icon: '📋' },
-  { id: 'iterations', label: 'Iterations', icon: '🔄' },
-  { id: 'export', label: 'Export', icon: '↓' },
-]
+function answer(value: string | null | undefined) {
+  return value?.trim().toLowerCase() ?? ''
+}
+
+function getStatus(totalResponses: number, value: number, threshold: number): 'PASS' | 'FAIL' | 'PENDING' {
+  if (totalResponses === 0) return 'PENDING'
+  return value >= threshold ? 'PASS' : 'FAIL'
+}
+
+function statusClasses(status: 'PASS' | 'FAIL' | 'PENDING') {
+  if (status === 'PASS') return 'bg-green-50 text-green-700 border border-green-200'
+  if (status === 'FAIL') return 'bg-red-50 text-red-700 border border-red-200'
+  return 'bg-gray-100 text-gray-600 border border-gray-200'
+}
+
+function formatMetricValue(value: number, type: MetricType, totalResponses: number) {
+  if (totalResponses === 0) return 'Pending'
+  return type === 'rating' ? `${value.toFixed(2)} / 5` : `${Math.round(value)}%`
+}
+
+function progressTowardTarget(value: number, target: number) {
+  if (target <= 0) return 0
+  return Math.min(100, Math.max(0, Math.round((value / target) * 100)))
+}
+
+function formatDateTime(value: string | null | undefined) {
+  if (!value) return 'Not yet available'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'Not yet available'
+  return date.toLocaleString()
+}
 
 export default function AdminFeedback() {
-  const allFeedback = useMemo(loadFeedback, [])
-  const [activeTab, setActiveTab] = useState('overview')
+  const { user } = useAuth()
+  const [tab, setTab] = useState<Tab>('Setup')
+  const [rows, setRows] = useState<AdminFeedbackRow[]>([])
+  const [config, setConfig] = useState<TestingConfig>(defaultConfig)
+  const [frame, setFrame] = useState<FrameworkState>({
+    assumptions: cloneAssumptions(),
+    metrics: cloneMetrics(),
+    frameworkVersion: '2026.08.unleash-v1',
+    metadata: {},
+  })
+  const [notice, setNotice] = useState('')
+  const [isLoading, setIsLoading] = useState(true)
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'success' | 'error'>('idle')
+  const [actions, setActions] = useState<Action[]>([])
+  const [iterations, setIterations] = useState<Iteration[]>([])
+  const [actionDraft, setActionDraft] = useState<Partial<Action> | null>(null)
+  const [iterationDraft, setIterationDraft] = useState<Partial<Iteration> | null>(null)
+  const [expandedAssumptions, setExpandedAssumptions] = useState<Record<string, boolean>>({})
+  const [expandedMetrics, setExpandedMetrics] = useState<Record<string, boolean>>({})
+  const [lastConfigUpdatedAt, setLastConfigUpdatedAt] = useState<string>('')
+
+  const load = async () => {
+    setIsLoading(true)
+    try {
+      const [feedback, cfg, framework, actionData, iterationData] = await Promise.all([
+        fetchFeedbackSubmissions(),
+        fetchTestingConfig(),
+        supabase?.from('testing_configurations').select('*').eq('id', 'current').maybeSingle(),
+        supabase?.from('testing_action_plans').select('*').is('deleted_at', null).order('target_completion_date', { ascending: true }),
+        supabase?.from('testing_iterations').select('*').is('deleted_at', null).order('iteration_number', { ascending: true }),
+      ])
+
+      const rawMetrics = normalizeMetrics(framework?.data?.evaluation_metrics)
+      const rawAssumptions = normalizeAssumptions(framework?.data?.validation_assumptions, rawMetrics)
+
+      setRows(feedback)
+      setConfig(cfg ?? defaultConfig)
+      setFrame({
+        assumptions: rawAssumptions,
+        metrics: rawMetrics,
+        frameworkVersion: typeof framework?.data?.framework_version === 'string' ? framework.data.framework_version : '2026.08.unleash-v1',
+        metadata: isObject(framework?.data?.configuration_metadata) ? framework.data.configuration_metadata : {},
+      })
+      setActions((actionData?.data as Action[] | null) ?? [])
+      setIterations((iterationData?.data as Iteration[] | null) ?? [])
+      setLastConfigUpdatedAt(typeof framework?.data?.updated_at === 'string' ? framework.data.updated_at : '')
+      setNotice('')
+    } catch {
+      setNotice('Unable to load live Supabase data.')
+      setSaveState('error')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    void load()
+    const channel = supabase
+      ?.channel('feedback-analytics-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'feedback_submissions' }, () => { void load() })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'testing_configurations' }, () => { void load() })
+      .subscribe()
+    return () => {
+      if (channel) void supabase?.removeChannel(channel)
+    }
+  }, [])
+
+  useEffect(() => {
+    setExpandedAssumptions(prev => {
+      const next = { ...prev }
+      for (const assumption of frame.assumptions) {
+        if (next[assumption.id] === undefined) next[assumption.id] = true
+      }
+      return next
+    })
+    setExpandedMetrics(prev => {
+      const next = { ...prev }
+      for (const metric of frame.metrics) {
+        if (next[metric.id] === undefined) next[metric.id] = true
+      }
+      return next
+    })
+  }, [frame.assumptions, frame.metrics])
+
+  const data = useMemo(() => {
+    const n = rows.length
+    const rating = average(rows.map(row => row.overallRating))
+    const firstImpression = average(rows.map(row => row.firstImpression))
+    const nav = average(rows.map(row => row.easeOfNavigation))
+    const learn = average(rows.map(row => row.easeOfLearning))
+    const composite = average([rating, firstImpression, nav, learn])
+
+    function isBugFree(row: AdminFeedbackRow) {
+      const bugExperience = answer(row.bugExperience)
+      const bugDescription = (row.bugDescription ?? '').trim()
+      if (!bugExperience && !bugDescription) return true
+      const noBugResponses = ['none', 'no', 'no bug', 'no bugs', 'no issues', 'n/a', 'na']
+      if (noBugResponses.includes(bugExperience) && bugDescription.length === 0) return true
+      return false
+    }
+
+    const taskCompletion = percent(rows.filter(row => answer(row.accomplishedTask) === 'yes').length, n)
+    const userSuccess = percent(rows.filter(row => ['yes', 'partially'].includes(answer(row.accomplishedTask))).length, n)
+    const retentionIntent = percent(rows.filter(row => answer(row.wouldUseAgain) === 'yes').length, n)
+    const recommendation = percent(rows.filter(row => answer(row.wouldRecommend) === 'yes').length, n)
+    const bugFree = percent(rows.filter(isBugFree).length, n)
+
+    const metricValues: Record<MetricKey, number> = {
+      overall_satisfaction_score: rating,
+      first_impression_score: firstImpression,
+      navigation_usability_score: nav,
+      learnability_score: learn,
+      task_completion_rate: taskCompletion,
+      user_success_rate: userSuccess,
+      retention_intent_rate: retentionIntent,
+      recommendation_rate: recommendation,
+      overall_user_satisfaction_composite: composite,
+      bug_free_rate: bugFree,
+    }
+
+    return {
+      n,
+      rating,
+      firstImpression,
+      nav,
+      learn,
+      composite,
+      taskCompletion,
+      userSuccess,
+      retentionIntent,
+      recommendation,
+      bugFree,
+      metricValues,
+      latestSubmissionAt: rows[0]?.submittedAt ?? '',
+    }
+  }, [rows])
+
+  const assumptionCards = useMemo(() => {
+    return frame.assumptions.map(assumption => {
+      const currentValue = data.metricValues[assumption.metricKey] ?? 0
+      const status = getStatus(data.n, currentValue, assumption.targetValue)
+      const completion = progressTowardTarget(currentValue, assumption.targetValue)
+      const metric = frame.metrics.find(item => item.key === assumption.metricKey)
+      return {
+        ...assumption,
+        status,
+        completion,
+        currentValue,
+        metricName: metric?.name ?? assumption.metricKey,
+      }
+    })
+  }, [frame.assumptions, frame.metrics, data.metricValues, data.n])
+
+  const metricCards = useMemo(() => {
+    return frame.metrics.map(metric => {
+      const currentValue = data.metricValues[metric.key] ?? 0
+      const status = getStatus(data.n, currentValue, metric.passThreshold)
+      return {
+        ...metric,
+        currentValue,
+        status,
+      }
+    })
+  }, [frame.metrics, data.metricValues, data.n])
+
+  const classificationMetrics = useMemo(() => {
+    const mapped: Record<string, { value: number; type: MetricType }> = {}
+    for (const metric of frame.metrics) {
+      mapped[metric.key] = {
+        value: data.metricValues[metric.key] ?? 0,
+        type: metric.targetType,
+      }
+    }
+    return mapped
+  }, [frame.metrics, data.metricValues])
+
+  const updateAssumption = (id: string, patch: Partial<ValidationAssumption>) => {
+    setFrame(current => ({
+      ...current,
+      assumptions: current.assumptions.map(assumption => (assumption.id === id ? { ...assumption, ...patch } : assumption)),
+    }))
+  }
+
+  const updateMetric = (id: string, patch: Partial<EvaluationMetric>) => {
+    setFrame(current => ({
+      ...current,
+      metrics: current.metrics.map(metric => (metric.id === id ? { ...metric, ...patch } : metric)),
+    }))
+  }
+
+  const save = async () => {
+    if (!supabase) return
+
+    const requiredErrors: string[] = []
+    if (!config.sessionId.trim()) requiredErrors.push('Testing Session ID is required.')
+    if (!config.prototypeVersion.trim()) requiredErrors.push('Prototype Version is required.')
+    if (!config.testingObjective.trim()) requiredErrors.push('Testing Objective is required.')
+    if (frame.assumptions.some(assumption => !assumption.title.trim())) requiredErrors.push('Every assumption must have a title.')
+    if (frame.metrics.some(metric => !metric.name.trim() || !metric.formula.trim())) requiredErrors.push('Every metric must have a name and formula.')
+
+    if (requiredErrors.length > 0) {
+      setSaveState('error')
+      setNotice(requiredErrors.join(' '))
+      return
+    }
+
+    const { data: { user: sessionUser } } = await supabase.auth.getUser()
+    if (!sessionUser || user?.role !== 'admin') {
+      setSaveState('error')
+      setNotice('Please sign in with a real administrator account before saving. Demo accounts cannot write to Supabase.')
+      return
+    }
+
+    setSaveState('saving')
+    setNotice('Saving testing configuration...')
+
+    const basePayload = {
+      id: 'current',
+      session_id: config.sessionId,
+      prototype_version: config.prototypeVersion,
+      user_group: config.userGroup,
+      testing_environment: config.testingEnvironment,
+      study_start_date: config.studyStartDate || null,
+      target_participants: Number(config.targetParticipants) || null,
+      testing_objective: config.testingObjective,
+      overall_success_criteria: config.overallSuccessCriteria,
+      validation_assumptions: frame.assumptions,
+      evaluation_metrics: frame.metrics,
+      updated_by: sessionUser.id,
+    }
+
+    const payloadWithMetadata = {
+      ...basePayload,
+      framework_version: frame.frameworkVersion,
+      configuration_metadata: {
+        ...frame.metadata,
+        saved_at_client: new Date().toISOString(),
+        assumptions_count: frame.assumptions.length,
+        metrics_count: frame.metrics.length,
+      },
+    }
+
+    let { error } = await supabase.from('testing_configurations').upsert(payloadWithMetadata, { onConflict: 'id' })
+    if (error && /framework_version|configuration_metadata/i.test(error.message)) {
+      const retry = await supabase.from('testing_configurations').upsert(basePayload, { onConflict: 'id' })
+      error = retry.error
+    }
+
+    if (error) {
+      setSaveState('error')
+      setNotice(error.message)
+      return
+    }
+
+    setSaveState('success')
+    setNotice('Testing configuration saved successfully.')
+    void load()
+  }
+
+  const saveAction = async () => {
+    if (!supabase || !actionDraft?.issue) return
+    const payload = {
+      issue: actionDraft.issue,
+      title: actionDraft.title ?? actionDraft.issue,
+      category: actionDraft.category ?? 'General',
+      description: actionDraft.description ?? '', reason: actionDraft.reason ?? '', expected_outcome: actionDraft.expected_outcome ?? '',
+      priority: actionDraft.priority ?? 'Medium',
+      suggested_solution: actionDraft.suggested_solution ?? '',
+      status: actionDraft.status ?? 'Open',
+      retest_required: !!actionDraft.retest_required,
+      completion_percentage: actionDraft.completion_percentage ?? 0,
+      target_completion_date: actionDraft.target_completion_date || null, completed_date: actionDraft.completed_date || null,
+      notes: actionDraft.notes ?? '', risks: actionDraft.risks ?? '', mitigation_strategy: actionDraft.mitigation_strategy ?? '',
+      created_by: (await supabase.auth.getUser()).data.user?.id,
+    }
+    const query = actionDraft.id ? supabase.from('testing_action_plans').update(payload).eq('id', actionDraft.id) : supabase.from('testing_action_plans').insert(payload)
+    const { error } = await query
+    setNotice(error?.message ?? 'Action plan saved.')
+    if (!error) {
+      setActionDraft(null)
+      void load()
+    }
+  }
+
+  const saveIteration = async () => {
+    if (!supabase || !iterationDraft?.version) return
+    const payload = {
+      version: iterationDraft.version,
+      testing_cycle: iterationDraft.testing_cycle ?? '',
+      iteration_number: iterationDraft.iteration_number ?? null, iteration_name: iterationDraft.iteration_name ?? iterationDraft.version,
+      phase: iterationDraft.phase ?? '', objective: iterationDraft.objective ?? '', summary: iterationDraft.summary ?? '', work_completed: iterationDraft.work_completed ?? '', feedback_received: iterationDraft.feedback_received ?? '',
+      improvements_made: iterationDraft.improvements_made ?? '',
+      issues_found: iterationDraft.issues_found ?? '', resolution: iterationDraft.resolution ?? '', validation_result: iterationDraft.validation_result ?? '',
+      completion_percentage: iterationDraft.completion_percentage ?? 0, status: iterationDraft.status ?? 'Planned',
+      start_date: iterationDraft.start_date || null, end_date: iterationDraft.end_date || null,
+      retesting_status: iterationDraft.retesting_status ?? 'Pending',
+      created_by: (await supabase.auth.getUser()).data.user?.id,
+    }
+    const query = iterationDraft.id ? supabase.from('testing_iterations').update(payload).eq('id', iterationDraft.id) : supabase.from('testing_iterations').insert(payload)
+    const { error } = await query
+    setNotice(error?.message ?? 'Iteration saved.')
+    if (!error) {
+      setIterationDraft(null)
+      void load()
+    }
+  }
+
+  const archiveRecord = async (table: 'testing_action_plans' | 'testing_iterations', id: string) => {
+    if (!supabase) return
+    const { error } = await supabase.from(table).update({ deleted_at: new Date().toISOString() }).eq('id', id)
+    setNotice(error?.message ?? 'Record archived.')
+    if (!error) void load()
+  }
+
+  const exportFile = async (kind: 'csv' | 'txt' | 'pdf') => {
+    const assumptionsText = frame.assumptions
+      .map(assumption => `${assumption.title} | Metric: ${assumption.metricKey} | Target: ${assumption.targetLabel}`)
+      .join('\n')
+    const metricsText = frame.metrics
+      .map(metric => `${metric.name} | Formula: ${metric.formula} | Target: ${metric.targetLabel} | Pass: ${metric.passThresholdLabel}`)
+      .join('\n')
+    const report = `MOOVE TRL-4 Evidence Report\nGenerated: ${new Date().toLocaleString()}\nParticipants: ${data.n}\nOUS: ${data.composite.toFixed(2)}/5\nRecommendation: ${data.recommendation}%\n\nAssumptions\n${assumptionsText}\n\nMetrics\n${metricsText}`
+
+    if (kind === 'pdf') {
+      const opened = openFeedbackReport({
+        generatedAt: new Date().toLocaleString(), config,
+        assumptions: frame.assumptions.map(item => ({ title: item.title, description: item.description, targetLabel: item.targetLabel })),
+        metrics: frame.metrics.map(item => ({ name: item.name, formula: item.formula, targetLabel: item.targetLabel, passThresholdLabel: item.passThresholdLabel })),
+        rows, actions, iterations,
+        overview: {
+          satisfaction: data.rating, firstImpression: data.firstImpression, navigation: data.nav, learnability: data.learn,
+          taskCompletion: data.taskCompletion, retention: data.retentionIntent, recommendation: data.recommendation, bugFree: data.bugFree,
+        },
+      })
+      if (!opened) setNotice('Allow pop-ups to open the print-ready PDF report.')
+    } else {
+      const content = kind === 'csv'
+        ? ['id,user,rating,navigation,learning,recommendation,timestamp', ...rows.map(row => [row.id, row.userId, row.overallRating, row.easeOfNavigation, row.easeOfLearning, row.wouldRecommend, row.submittedAt].map(value => JSON.stringify(value ?? '')).join(','))].join('\n')
+        : report
+      const anchor = document.createElement('a')
+      anchor.href = URL.createObjectURL(new Blob([content], { type: kind === 'csv' ? 'text/csv' : 'text/plain' }))
+      anchor.download = `moove-trl4.${kind}`
+      anchor.click()
+    }
+
+    if (supabase) {
+      await supabase.from('testing_report_exports').insert({
+        report_type: kind,
+        configuration_id: 'current',
+        generated_by: (await supabase.auth.getUser()).data.user?.id,
+        metadata: { participants: data.n },
+      })
+    }
+  }
+
+  const tabs: Tab[] = ['Setup', 'Overview', 'Validation Insights', 'Classification', 'Learning', 'Action Plan', 'Iterations', 'Export']
+  const assumedLastUpdated = data.latestSubmissionAt || lastConfigUpdatedAt
 
   return (
-    <div className="p-4 max-w-5xl mx-auto pb-8">
-      <div className="mb-5">
-        <div className="flex items-center gap-2 mb-1 flex-wrap">
-          <span className="text-xs font-black text-white bg-moove-orange px-2 py-0.5 rounded-full">UNLEASH</span>
-          <span className="text-xs font-black text-white bg-blue-500 px-2 py-0.5 rounded-full">TRL 4</span>
-          <h1 className="font-display font-black text-2xl text-moove-brown">Testing Analysis Dashboard</h1>
-        </div>
-        <p className="text-sm text-moove-muted">
-          {allFeedback.length} feedback submission{allFeedback.length !== 1 ? 's' : ''} collected ·
-          Testing Method: <span className="font-semibold text-moove-brown">User Feedback Survey</span>
-        </p>
-      </div>
+    <div className="p-6 max-w-6xl mx-auto">
+      <h1 className="font-display font-black text-2xl text-moove-brown">UNLEASH TRL 4 Testing Analysis</h1>
+      <p className="text-sm text-moove-muted mb-4">Realtime Supabase evidence dashboard.</p>
 
-      {/* Tab nav */}
-      <div className="flex gap-1 overflow-x-auto mb-5 pb-1 scrollbar-none">
-        {TABS.map(tab => (
-          <button key={tab.id} onClick={() => setActiveTab(tab.id)}
-            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap border-2 transition-all ${
-              activeTab === tab.id
-                ? 'bg-moove-orange text-white border-moove-orange'
-                : 'bg-white text-moove-muted border-gray-200 hover:border-moove-orange'
-            }`}>
-            <span>{tab.icon}</span> {tab.label}
+      {notice && (
+        <div className={`p-3 mb-3 rounded-xl text-sm ${saveState === 'error' ? 'bg-red-50 text-red-700' : saveState === 'success' ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-800'}`}>
+          {notice}
+        </div>
+      )}
+
+      <div className="flex gap-2 overflow-x-auto mb-5">
+        {tabs.map(item => (
+          <button key={item} onClick={() => setTab(item)} className={`px-4 py-2 rounded-full whitespace-nowrap text-xs font-bold ${tab === item ? 'bg-moove-orange text-white' : 'bg-white border border-moove-border'}`}>
+            {item}
           </button>
         ))}
       </div>
 
-      {activeTab === 'setup' && <SetupTab />}
-      {activeTab === 'overview' && <OverviewTab data={allFeedback} />}
-      {activeTab === 'insights' && <InsightsTab data={allFeedback} />}
-      {activeTab === 'classification' && <ClassificationTab data={allFeedback} />}
-      {activeTab === 'actions' && <ActionPlanTab />}
-      {activeTab === 'iterations' && <IterationsTab />}
-      {activeTab === 'export' && <ExportTab data={allFeedback} />}
+      {tab === 'Setup' && (
+        <div className="space-y-5">
+          <div className="bg-white p-5 rounded-2xl card-shadow">
+            <div className="flex items-center justify-between gap-3 mb-4">
+              <div>
+                <SectionHeader>UNLEASH Validation Framework Setup</SectionHeader>
+                <p className="text-sm text-moove-muted">Configure assumptions and KPI definitions. Each assumption and KPI is saved to Supabase with versioned metadata.</p>
+              </div>
+              <button
+                onClick={() => setFrame(current => ({ ...current, assumptions: cloneAssumptions(), metrics: cloneMetrics() }))}
+                className="px-3 py-2 rounded-xl bg-white border border-moove-border text-sm font-semibold hover:border-moove-orange"
+              >
+                Reset to Predefined Framework
+              </button>
+            </div>
+
+            <div className="grid md:grid-cols-2 gap-3">
+              {configFields.map(field => (
+                <label key={field.key} className="text-xs font-semibold text-moove-muted">
+                  {field.label}{field.required ? ' *' : ''}
+                  <input
+                    value={config[field.key]}
+                    type={field.type ?? 'text'}
+                    onChange={event => setConfig(current => ({ ...current, [field.key]: event.target.value }))}
+                    className="mt-1 block w-full border border-moove-border rounded-xl p-2.5 text-sm text-moove-brown"
+                  />
+                </label>
+              ))}
+            </div>
+
+            <div className="mt-4 grid md:grid-cols-2 gap-3">
+              <label className="text-xs font-semibold text-moove-muted">
+                Framework Version
+                <input
+                  value={frame.frameworkVersion}
+                  onChange={event => setFrame(current => ({ ...current, frameworkVersion: event.target.value }))}
+                  className="mt-1 block w-full border border-moove-border rounded-xl p-2.5 text-sm text-moove-brown"
+                />
+              </label>
+              <label className="text-xs font-semibold text-moove-muted">
+                Last Config Update
+                <input value={formatDateTime(lastConfigUpdatedAt)} disabled className="mt-1 block w-full border border-moove-border rounded-xl p-2.5 text-sm text-moove-muted bg-gray-50" />
+              </label>
+            </div>
+
+            <div className="mt-5 flex flex-wrap items-center gap-2">
+              <button onClick={save} disabled={saveState === 'saving'} className="px-4 py-2 rounded-2xl bg-moove-orange text-white text-sm font-bold disabled:opacity-70">
+                {saveState === 'saving' ? 'Saving Configuration...' : 'Save Testing Configuration'}
+              </button>
+              <div className="text-xs text-moove-muted">UPSERT mode enabled: saves update the existing record instead of creating duplicates.</div>
+            </div>
+          </div>
+
+          <div className="bg-white p-5 rounded-2xl card-shadow">
+            <div className="flex items-center justify-between gap-3 mb-3">
+              <SectionHeader>Validation Assumptions</SectionHeader>
+              <div className="text-xs text-moove-muted">1 card per assumption</div>
+            </div>
+            <div className="grid xl:grid-cols-2 gap-4">
+              {assumptionCards.map((assumption, index) => {
+                const headerColor = CARD_HEADER_COLORS[index % CARD_HEADER_COLORS.length]
+                const expanded = expandedAssumptions[assumption.id] ?? true
+                return (
+                  <div key={assumption.id} className="rounded-2xl border border-moove-border bg-white card-shadow hover-lift">
+                    <div className="rounded-t-2xl px-4 py-3 text-white" style={{ background: headerColor }}>
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-lg">{assumption.icon}</span>
+                          <div className="text-sm font-black truncate">Assumption {index + 1}</div>
+                        </div>
+                        <div className={`text-[11px] font-black px-2 py-1 rounded-full ${statusClasses(assumption.status)}`}>{assumption.status}</div>
+                      </div>
+                    </div>
+
+                    <div className="p-4">
+                      <div className="flex items-start justify-between gap-2 mb-2">
+                        <input
+                          value={assumption.title}
+                          onChange={event => updateAssumption(assumption.id, { title: event.target.value })}
+                          className="w-full font-semibold text-sm text-moove-brown border-b border-moove-border pb-1"
+                        />
+                        <button
+                          onClick={() => setExpandedAssumptions(current => ({ ...current, [assumption.id]: !expanded }))}
+                          className="text-xs font-bold text-moove-muted shrink-0"
+                        >
+                          {expanded ? 'Collapse' : 'Expand'}
+                        </button>
+                      </div>
+
+                      <div className="text-xs text-moove-muted mb-3">Current: {formatMetricValue(assumption.currentValue, assumption.targetType, data.n)} | Target: {assumption.targetLabel}</div>
+                      <div className="h-2 bg-gray-100 rounded-full overflow-hidden mb-1">
+                        <div className="h-full rounded-full transition-all duration-700" style={{ width: `${assumption.completion}%`, background: headerColor }} />
+                      </div>
+                      <div className="text-[11px] text-moove-muted mb-2">{assumption.completion}% of target achieved</div>
+
+                      {expanded && (
+                        <div className="space-y-2">
+                          <textarea
+                            value={assumption.description}
+                            onChange={event => updateAssumption(assumption.id, { description: event.target.value })}
+                            className="w-full border border-moove-border rounded-xl p-2.5 text-sm"
+                            rows={2}
+                          />
+                          <div className="grid sm:grid-cols-2 gap-2">
+                            <label className="text-xs text-moove-muted">
+                              Linked metric
+                              <select
+                                value={assumption.metricKey}
+                                onChange={event => updateAssumption(assumption.id, { metricKey: event.target.value as MetricKey })}
+                                className="mt-1 w-full border border-moove-border rounded-xl p-2 text-sm"
+                              >
+                                {frame.metrics.map(metric => (
+                                  <option key={metric.id} value={metric.key}>{metric.name}</option>
+                                ))}
+                              </select>
+                            </label>
+                            <label className="text-xs text-moove-muted">
+                              Target value
+                              <input
+                                type="number"
+                                step={assumption.targetType === 'rating' ? '0.1' : '1'}
+                                value={assumption.targetValue}
+                                onChange={event => updateAssumption(assumption.id, { targetValue: toNumber(event.target.value, assumption.targetValue) })}
+                                className="mt-1 w-full border border-moove-border rounded-xl p-2 text-sm"
+                              />
+                            </label>
+                          </div>
+                          <input
+                            value={assumption.targetLabel}
+                            onChange={event => updateAssumption(assumption.id, { targetLabel: event.target.value })}
+                            className="w-full border border-moove-border rounded-xl p-2.5 text-sm"
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+
+          <div className="bg-white p-5 rounded-2xl card-shadow">
+            <div className="flex items-center justify-between gap-3 mb-3">
+              <SectionHeader>Predefined Evaluation Metrics And KPI</SectionHeader>
+              <div className="text-xs text-moove-muted">1 card per KPI definition</div>
+            </div>
+            <div className="grid xl:grid-cols-2 gap-4">
+              {metricCards.map((metric, index) => {
+                const headerColor = CARD_HEADER_COLORS[index % CARD_HEADER_COLORS.length]
+                const expanded = expandedMetrics[metric.id] ?? true
+                return (
+                  <div key={metric.id} className="rounded-2xl border border-moove-border bg-white card-shadow hover-lift">
+                    <div className="rounded-t-2xl px-4 py-3 text-white" style={{ background: headerColor }}>
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-lg">{metric.icon}</span>
+                          <div className="text-sm font-black truncate">{metric.name}</div>
+                        </div>
+                        <div className={`text-[11px] font-black px-2 py-1 rounded-full ${statusClasses(metric.status)}`}>{metric.status}</div>
+                      </div>
+                    </div>
+
+                    <div className="p-4 space-y-2">
+                      <div className="text-xs text-moove-muted">Current Result: {formatMetricValue(metric.currentValue, metric.targetType, data.n)}</div>
+                      <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                        <div className="h-full rounded-full transition-all duration-700" style={{ width: `${progressTowardTarget(metric.currentValue, metric.targetValue)}%`, background: headerColor }} />
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-xs text-moove-muted">Pass threshold: {metric.passThresholdLabel}</div>
+                        <button
+                          onClick={() => setExpandedMetrics(current => ({ ...current, [metric.id]: !expanded }))}
+                          className="text-xs font-bold text-moove-muted"
+                        >
+                          {expanded ? 'Collapse' : 'Expand'}
+                        </button>
+                      </div>
+
+                      {expanded && (
+                        <div className="space-y-2">
+                          <input value={metric.name} onChange={event => updateMetric(metric.id, { name: event.target.value })} className="w-full border border-moove-border rounded-xl p-2.5 text-sm font-semibold" />
+                          <textarea value={metric.description} onChange={event => updateMetric(metric.id, { description: event.target.value })} rows={2} className="w-full border border-moove-border rounded-xl p-2.5 text-sm" />
+                          <textarea value={metric.formula} onChange={event => updateMetric(metric.id, { formula: event.target.value })} rows={2} className="w-full border border-moove-border rounded-xl p-2.5 text-sm" />
+                          <div className="grid sm:grid-cols-2 gap-2">
+                            <input value={metric.targetLabel} onChange={event => updateMetric(metric.id, { targetLabel: event.target.value })} className="w-full border border-moove-border rounded-xl p-2 text-sm" />
+                            <input value={metric.passThresholdLabel} onChange={event => updateMetric(metric.id, { passThresholdLabel: event.target.value })} className="w-full border border-moove-border rounded-xl p-2 text-sm" />
+                          </div>
+                          <div className="grid sm:grid-cols-2 gap-2">
+                            <label className="text-xs text-moove-muted">
+                              Target
+                              <input
+                                type="number"
+                                step={metric.targetType === 'rating' ? '0.1' : '1'}
+                                value={metric.targetValue}
+                                onChange={event => updateMetric(metric.id, { targetValue: toNumber(event.target.value, metric.targetValue) })}
+                                className="mt-1 w-full border border-moove-border rounded-xl p-2 text-sm"
+                              />
+                            </label>
+                            <label className="text-xs text-moove-muted">
+                              Pass threshold
+                              <input
+                                type="number"
+                                step={metric.targetType === 'rating' ? '0.1' : '1'}
+                                value={metric.passThreshold}
+                                onChange={event => updateMetric(metric.id, { passThreshold: toNumber(event.target.value, metric.passThreshold) })}
+                                className="mt-1 w-full border border-moove-border rounded-xl p-2 text-sm"
+                              />
+                            </label>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tab === 'Overview' && (
+        <div>
+          {isLoading ? (
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+              {Array.from({ length: 8 }).map((_, index) => <div key={index} className="h-28 bg-white rounded-2xl card-shadow animate-pulse" />)}
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              <StatCard icon={'👥'} label={'Participants'} value={String(data.n)} color={'#F97316'} />
+              <StatCard icon={'⭐'} label={'Overall Satisfaction'} value={formatMetricValue(data.rating, 'rating', data.n)} color={'#FBBF24'} />
+              <StatCard icon={'📊'} label={'OUS Composite'} value={formatMetricValue(data.composite, 'rating', data.n)} color={'#22C55E'} sub={'Overall User Satisfaction'} />
+              <StatCard icon={'📣'} label={'Recommendation'} value={formatMetricValue(data.recommendation, 'percent', data.n)} color={'#0EA5E9'} />
+              <StatCard icon={'✅'} label={'Task Completion'} value={formatMetricValue(data.taskCompletion, 'percent', data.n)} color={'#22C55E'} />
+              <StatCard icon={'🔁'} label={'Would Use Again'} value={formatMetricValue(data.retentionIntent, 'percent', data.n)} color={'#A855F7'} />
+              <StatCard icon={'🎯'} label={'User Success'} value={formatMetricValue(data.userSuccess, 'percent', data.n)} color={'#F97316'} />
+              <StatCard icon={'🐞'} label={'Bug-Free Rate'} value={formatMetricValue(data.bugFree, 'percent', data.n)} color={'#EF4444'} />
+            </div>
+          )}
+
+          <div className="bg-white p-5 rounded-2xl card-shadow mt-5">
+            <SectionHeader>Assumption Validation Status</SectionHeader>
+            <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-3">
+              {assumptionCards.map((assumption, index) => {
+                const cardColor = CARD_HEADER_COLORS[index % CARD_HEADER_COLORS.length]
+                return (
+                  <div key={assumption.id} className="rounded-2xl border border-moove-border p-4 bg-moove-cream/30">
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <div className="text-sm font-bold text-moove-brown flex items-center gap-2"><span>{assumption.icon}</span><span>{assumption.metricName}</span></div>
+                      <div className={`text-[11px] font-black px-2 py-1 rounded-full ${statusClasses(assumption.status)}`}>{assumption.status}</div>
+                    </div>
+                    <div className="text-xs font-semibold text-moove-brown mb-1">{assumption.title}</div>
+                    <div className="text-[11px] text-moove-muted mb-2">{assumption.description}</div>
+                    <div className="text-[11px] text-moove-muted">Target: {assumption.targetLabel}</div>
+                    <div className="text-[11px] text-moove-muted mb-2">Current: {formatMetricValue(assumption.currentValue, assumption.targetType, data.n)}</div>
+                    <div className="h-2 bg-white rounded-full overflow-hidden mb-1">
+                      <div className="h-full rounded-full transition-all duration-700" style={{ width: `${assumption.completion}%`, background: cardColor }} />
+                    </div>
+                    <div className="flex items-center justify-between text-[11px] text-moove-muted">
+                      <span>{assumption.completion}% completion</span>
+                      <span>Updated: {formatDateTime(assumedLastUpdated)}</span>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+
+          <div className="grid lg:grid-cols-2 gap-4 mt-5">
+            <div>
+              <div className="bg-white p-5 rounded-2xl card-shadow">
+                <h2 className="font-bold mb-3">Validation Scorecard</h2>
+                <div className="space-y-3">
+                  {metricCards.map(metric => (
+                    <div key={metric.id} className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold text-moove-brown">{metric.name}</div>
+                        <div className="text-xs text-moove-muted">{formatMetricValue(metric.currentValue, metric.targetType, data.n)} | Target {metric.targetLabel}</div>
+                      </div>
+                      <div className={`text-xs font-black px-2 py-1 rounded-full ${statusClasses(metric.status)}`}>{metric.status}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <RatingBreakdown rows={rows} values={{ rating: data.rating, firstImpression: data.firstImpression, nav: data.nav, learn: data.learn, ous: data.composite }} />
+            </div>
+          </div>
+
+          <div className="mt-4 bg-white p-5 rounded-2xl card-shadow">
+            <div className="flex items-center justify-between gap-2 mb-3">
+              <SectionHeader>Intent And Completion KPI</SectionHeader>
+              <div className="text-xs text-moove-muted">Research-aligned participant intent summary</div>
+            </div>
+            <UserIntent data={{ reuse: data.retentionIntent, recommend: data.recommendation, task: data.taskCompletion }} />
+          </div>
+        </div>
+      )}
+
+      {tab === 'Validation Insights' && <Insights rows={rows} />}
+      {tab === 'Classification' && (
+        <div className="space-y-4">
+          <div className="bg-white rounded-2xl p-5 card-shadow">
+            <h2 className="font-bold text-lg text-moove-brown">Validation Insights by Classification Lens</h2>
+            <p className="text-sm text-moove-muted mt-1">Evidence-based research findings organized by Desirability, Feasibility, and Viability using participant responses and calculated evaluation metrics.</p>
+          </div>
+          <Classification rows={rows} metrics={classificationMetrics} totalResponses={data.n} lastUpdatedAt={formatDateTime(assumedLastUpdated)} />
+        </div>
+      )}
+      {tab === 'Learning' && <LearningReflection rows={rows} participantCount={data.n} updatedAt={formatDateTime(assumedLastUpdated)} />}
+
+      {tab === 'Action Plan' && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between bg-white p-5 rounded-2xl card-shadow">
+            <div>
+              <h2 className="font-bold">Validation Action Plan</h2>
+              <p className="text-sm text-moove-muted">{actions.filter(item => item.status === 'Done').length} of {actions.length} actions completed</p>
+            </div>
+            <button onClick={() => setActionDraft({ priority: 'Medium', status: 'Open', completion_percentage: 0, retest_required: false })} className="px-4 py-2 rounded-xl bg-moove-orange text-white text-sm font-bold">+ Add action</button>
+          </div>
+
+          {actionDraft && (
+            <div className="bg-white p-5 rounded-2xl card-shadow grid md:grid-cols-2 gap-3">
+              <input autoFocus placeholder="Action title" value={actionDraft.issue ?? ''} onChange={event => setActionDraft(draft => ({ ...draft!, issue: event.target.value, title: event.target.value }))} className="md:col-span-2 border rounded-xl p-3 text-sm" />
+              <input placeholder="Category" value={actionDraft.category ?? ''} onChange={event => setActionDraft(draft => ({ ...draft!, category: event.target.value }))} className="border rounded-xl p-3 text-sm" />
+              <input type="date" value={actionDraft.target_completion_date ?? ''} onChange={event => setActionDraft(draft => ({ ...draft!, target_completion_date: event.target.value }))} className="border rounded-xl p-3 text-sm" />
+              <select value={actionDraft.priority ?? 'Medium'} onChange={event => setActionDraft(draft => ({ ...draft!, priority: event.target.value as Action['priority'] }))} className="border rounded-xl p-3 text-sm"><option>High</option><option>Medium</option><option>Low</option></select>
+              <select value={actionDraft.status ?? 'Open'} onChange={event => setActionDraft(draft => ({ ...draft!, status: event.target.value as Action['status'] }))} className="border rounded-2xl p-3 text-sm"><option>Open</option><option>In Progress</option><option>Done</option></select>
+              <textarea placeholder="Suggested solution" value={actionDraft.suggested_solution ?? ''} onChange={event => setActionDraft(draft => ({ ...draft!, suggested_solution: event.target.value }))} className="md:col-span-2 border rounded-xl p-3 text-sm" />
+              <textarea placeholder="Reason" value={actionDraft.reason ?? ''} onChange={event => setActionDraft(draft => ({ ...draft!, reason: event.target.value }))} className="border rounded-xl p-3 text-sm" />
+              <label className="text-sm">Completion: {actionDraft.completion_percentage ?? 0}%<input type="range" min="0" max="100" value={actionDraft.completion_percentage ?? 0} onChange={event => setActionDraft(draft => ({ ...draft!, completion_percentage: Number(event.target.value) }))} className="w-full accent-orange-500" /></label>
+              <label className="text-sm flex gap-2 items-center"><input type="checkbox" checked={!!actionDraft.retest_required} onChange={event => setActionDraft(draft => ({ ...draft!, retest_required: event.target.checked }))} /> Retest required</label>
+              <div className="flex gap-2 justify-end"><button onClick={() => setActionDraft(null)} className="px-3 py-2 text-sm">Cancel</button><button onClick={saveAction} className="px-4 py-2 rounded-xl bg-moove-orange text-white text-sm font-bold">Save action</button></div>
+            </div>
+          )}
+
+          <div className="space-y-3">
+            {actions.length === 0 ? <div className="bg-white rounded-2xl p-10 card-shadow text-center">No action items yet.</div> : actions.map(item => (
+              <div key={item.id} className="bg-white rounded-2xl p-4 card-shadow">
+                <div className="flex justify-between items-start mb-2">
+                  <div className="flex gap-2">
+                    <span className="text-xs font-black px-2 py-0.5 rounded-full text-white" style={{ background: item.priority === 'High' ? '#EF4444' : item.priority === 'Medium' ? '#FBBF24' : '#22C55E' }}>{item.priority}</span>
+                    <span className="text-xs font-bold px-2 py-0.5 rounded-full border">{item.status}</span>
+                  </div>
+                  <div className="flex gap-2"><button onClick={() => setActionDraft(item)} className="text-moove-orange text-xs font-bold">Edit</button><button onClick={() => void archiveRecord('testing_action_plans', item.id)} className="text-red-400 text-xs hover:text-red-600">Archive</button></div>
+                </div>
+                <div className="text-sm font-semibold text-moove-brown mb-1">{item.issue}</div>
+                {item.suggested_solution && <div className="text-xs text-moove-muted mb-2">→ {item.suggested_solution}</div>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {tab === 'Iterations' && (
+        <div className="space-y-4">
+          <div className="flex justify-between items-center bg-white p-5 rounded-2xl card-shadow">
+            <div>
+              <h2 className="font-bold">Prototype timeline</h2>
+              <p className="text-sm text-moove-muted">Document each validation cycle and its evidence.</p>
+            </div>
+            <button onClick={() => setIterationDraft({ retesting_status: 'Pending', status: 'Planned', completion_percentage: 0 })} className="px-4 py-2 rounded-xl bg-purple-600 text-white text-sm font-bold">+ Add iteration</button>
+          </div>
+
+          {iterationDraft && (
+            <div className="bg-white p-5 rounded-2xl card-shadow grid md:grid-cols-2 gap-3">
+              <input autoFocus placeholder="Prototype version" value={iterationDraft.version ?? ''} onChange={event => setIterationDraft(draft => ({ ...draft!, version: event.target.value }))} className="border rounded-xl p-3 text-sm" />
+              <input placeholder="Testing cycle" value={iterationDraft.testing_cycle ?? ''} onChange={event => setIterationDraft(draft => ({ ...draft!, testing_cycle: event.target.value }))} className="border rounded-xl p-3 text-sm" />
+              <input type="number" placeholder="Iteration #" value={iterationDraft.iteration_number ?? ''} onChange={event => setIterationDraft(draft => ({ ...draft!, iteration_number: Number(event.target.value) }))} className="border rounded-xl p-3 text-sm" />
+              <input placeholder="Phase" value={iterationDraft.phase ?? ''} onChange={event => setIterationDraft(draft => ({ ...draft!, phase: event.target.value }))} className="border rounded-xl p-3 text-sm" />
+              <textarea placeholder="Improvements made" value={iterationDraft.improvements_made ?? ''} onChange={event => setIterationDraft(draft => ({ ...draft!, improvements_made: event.target.value }))} className="md:col-span-2 border rounded-2xl p-3 text-sm" />
+              <select value={iterationDraft.retesting_status ?? 'Pending'} onChange={event => setIterationDraft(draft => ({ ...draft!, retesting_status: event.target.value as Iteration['retesting_status'] }))} className="border rounded-xl p-3 text-sm"><option>Pending</option><option>In Progress</option><option>Complete</option></select>
+              <select value={iterationDraft.status ?? 'Planned'} onChange={event => setIterationDraft(draft => ({ ...draft!, status: event.target.value as Iteration['status'] }))} className="border rounded-xl p-3 text-sm"><option>Planned</option><option>In Progress</option><option>Complete</option></select>
+              <div className="flex gap-2 justify-end"><button onClick={() => setIterationDraft(null)} className="px-3 py-2 text-sm">Cancel</button><button onClick={saveIteration} className="px-4 py-2 rounded-xl bg-purple-600 text-white text-sm font-bold">Save iteration</button></div>
+            </div>
+          )}
+
+          <div className="space-y-3">
+            {iterations.length === 0 ? <div className="bg-white rounded-2xl p-10 card-shadow text-center">No iterations logged yet.</div> : iterations.map((iteration, index) => (
+              <div key={iteration.id} className="bg-white p-4 rounded-2xl card-shadow">
+                <div className="flex justify-between items-start mb-2">
+                  <div className="flex items-center gap-2"><span className="text-xs font-black text-moove-orange bg-orange-50 px-2 py-0.5 rounded-full">v{iteration.version}</span><span className="text-xs text-moove-muted">{iteration.testing_cycle}</span></div>
+                  <div className="flex items-center gap-2"><span className="text-xs text-moove-muted">#{iteration.iteration_number ?? index + 1}</span><button onClick={() => setIterationDraft(iteration)} className="text-moove-orange text-xs font-bold">Edit</button><button onClick={() => void archiveRecord('testing_iterations', iteration.id)} className="text-red-400 text-xs hover:text-red-600">Archive</button></div>
+                </div>
+                {iteration.improvements_made && <div className="text-xs text-moove-brown bg-moove-cream rounded-xl p-2.5 leading-relaxed">{iteration.improvements_made}</div>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {tab === 'Export' && <ExportTab count={data.n} onExport={exportFile} />}
     </div>
   )
 }

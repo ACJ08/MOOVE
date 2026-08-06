@@ -24,7 +24,6 @@ interface AuthContextType {
   login: (email: string, password: string) => Promise<{ ok: boolean; error?: string; role?: 'driver' | 'admin' }>
   register: (name: string, email: string, password: string) => Promise<{ ok: boolean; error?: string }>
   loginDemo: () => void
-  loginAdminDemo: () => void
   logout: () => Promise<void>
   updateUser: (updates: Partial<User>) => Promise<void>
   forgotPassword: (email: string) => Promise<{ ok: boolean; error?: string }>
@@ -43,16 +42,7 @@ const DEMO_USER: User = {
   vehicleType: 'Sedan',
 }
 
-const ADMIN_DEMO_USER: User = {
-  id: 'admin-demo',
-  name: 'Research Admin',
-  email: 'admin@moove.app',
-  joinedDate: '2026-01-01',
-  role: 'admin',
-}
-
 const DEMO_PASSWORD  = 'Driver123!'
-const ADMIN_PASSWORD = 'Admin123!'
 
 // ─── localStorage keys ────────────────────────────────────────────────────────
 
@@ -159,15 +149,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // ─── login ──────────────────────────────────────────────────────────────────
 
   const login = async (email: string, password: string): Promise<{ ok: boolean; error?: string; role?: 'driver' | 'admin' }> => {
-    if (email === DEMO_USER.email && password === DEMO_PASSWORD) {
-      setUser(DEMO_USER); persistLocal(DEMO_USER); setLoading(false)
-      return { ok: true, role: 'driver' }
-    }
-    if (email === ADMIN_DEMO_USER.email && password === ADMIN_PASSWORD) {
-      setUser(ADMIN_DEMO_USER); persistLocal(ADMIN_DEMO_USER); setLoading(false)
-      return { ok: true, role: 'admin' }
-    }
-
+    // When Supabase is configured, every account (including the documented
+    // administrator account) must establish a real JWT-backed session. This
+    // ensures admin RLS policies can authorize database writes.
     if (supabase) {
       const { data, error } = await supabase.auth.signInWithPassword({ email, password })
       if (!error && data.user) {
@@ -182,9 +166,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return { ok: false, error: 'Please verify your email address before signing in.' }
         if (error.message.includes('Too many requests'))
           return { ok: false, error: 'Too many attempts. Please try again in a few minutes.' }
+        return { ok: false, error: error.message }
       }
     }
 
+    // These convenience identities exist only for an offline preview where no
+    // Supabase project is configured. They never have database permissions.
+    if (email === DEMO_USER.email && password === DEMO_PASSWORD) {
+      setUser(DEMO_USER); persistLocal(DEMO_USER); setLoading(false)
+      return { ok: true, role: 'driver' }
+    }
     // localStorage fallback
     const found = getLocalUsers().find(u => u.email === email && u.password === password)
     if (found) {
@@ -199,7 +190,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // ─── register ───────────────────────────────────────────────────────────────
 
   const register = async (name: string, email: string, password: string): Promise<{ ok: boolean; error?: string }> => {
-    if ([DEMO_USER.email, ADMIN_DEMO_USER.email].includes(email))
+    if (email === DEMO_USER.email)
       return { ok: false, error: 'Email already in use.' }
 
     if (supabase) {
@@ -255,7 +246,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // ─── demo shortcuts ──────────────────────────────────────────────────────────
 
   const loginDemo = () => { setUser(DEMO_USER); persistLocal(DEMO_USER); setLoading(false) }
-  const loginAdminDemo = () => { setUser(ADMIN_DEMO_USER); persistLocal(ADMIN_DEMO_USER); setLoading(false) }
 
   // ─── logout ──────────────────────────────────────────────────────────────────
 
@@ -301,7 +291,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, loginDemo, loginAdminDemo, logout, updateUser, forgotPassword }}>
+    <AuthContext.Provider value={{ user, loading, login, register, loginDemo, logout, updateUser, forgotPassword }}>
       {children}
     </AuthContext.Provider>
   )
