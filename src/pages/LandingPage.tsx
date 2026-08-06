@@ -201,6 +201,69 @@ const marqueeItems = [
   { icon: '🏆', text: 'Daily Streaks' },
 ]
 
+// ─── Why Moo? ───────────────────────────────────────────────────────────────
+const mooStories = [
+  { icon: '🐄', accent: '#F97316', title: 'Why “Moo”?', description: 'MOOVE is inspired by the familiar “moo” of cattle and the word “move” — a reminder that small movements can create healthier journeys.', detail: 'A playful name with a meaningful purpose: making wellness feel easy to begin.' },
+  { icon: '🐃', accent: '#A855F7', title: 'Why the Carabao?', description: 'Moo is a carabao, the national animal of the Philippines — a trusted symbol of strength, resilience, patience, and hard work.', detail: 'Like Filipino drivers, the carabao keeps communities, families, and businesses moving through quiet dedication.' },
+  { icon: '💙', accent: '#0EA5E9', title: 'Why MOOVE?', description: 'Moo pairs a friendly identity with a simple message: true endurance is supported by proper self-care.', detail: 'Guided stretches and healthier driving habits help you stay comfortable, active, and ready for the road ahead.' },
+]
+
+function WhyMoo() {
+  const sectionRef = useRef<HTMLElement>(null)
+  const [visible, setVisible] = useState(false)
+
+  useEffect(() => {
+    const node = sectionRef.current
+    if (!node) return
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) { setVisible(true); observer.disconnect() }
+    }, { threshold: 0.12 })
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [])
+
+  return (
+    <section id="why-moo" ref={sectionRef} className="relative overflow-hidden px-6 py-24 sm:py-28" style={{ background: 'linear-gradient(145deg, #FFF9F3 0%, #FFF0E5 48%, #F6F1FF 100%)' }}>
+      <div className="absolute inset-0 pointer-events-none" aria-hidden="true">
+        <div className="absolute -top-28 left-[8%] h-72 w-72 rounded-full opacity-50 blur-3xl" style={{ background: '#FDD5B8' }} />
+        <div className="absolute bottom-0 right-[6%] h-80 w-80 rounded-full opacity-45 blur-3xl" style={{ background: '#DDD6FE' }} />
+      </div>
+      <div className="relative mx-auto max-w-7xl">
+        <header className={`mx-auto mb-14 max-w-3xl text-center why-moo-reveal ${visible ? 'is-visible' : ''}`}>
+          <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-orange-200 bg-white/75 px-4 py-2 text-sm font-bold text-moove-orange shadow-sm backdrop-blur"><span aria-hidden="true">🐃</span> Why Moo?</div>
+          <h2 className="font-display text-4xl font-black leading-tight text-moove-brown sm:text-5xl">More Than a Mascot—<br className="hidden sm:block" /> A Symbol of Every Filipino Driver.</h2>
+          <div className="mx-auto mt-5 h-1 w-20 rounded-full why-moo-underline" />
+          <p className="mt-6 text-base leading-relaxed text-moove-muted sm:text-lg">Behind every healthy journey is a story. MOOVE brings movement, wellness, and Filipino resilience together in Moo: a friendly carabao companion for every driver on the road.</p>
+        </header>
+
+        <div className="grid items-center gap-10 lg:grid-cols-[0.82fr_1.18fr] lg:gap-16">
+          <div className={`relative mx-auto flex min-h-[330px] w-full max-w-[440px] items-center justify-center why-moo-reveal ${visible ? 'is-visible' : ''}`} style={{ transitionDelay: '100ms' }}>
+            <div className="absolute h-[290px] w-[290px] rounded-full border border-orange-200/80 bg-white/40 shadow-inner backdrop-blur-sm sm:h-[350px] sm:w-[350px]" />
+            <div className="absolute h-[340px] w-[340px] rounded-full border border-dashed border-orange-300/70 animate-spin-slow sm:h-[410px] sm:w-[410px]" style={{ animationDuration: '28s' }} />
+            <div className="absolute -left-1 top-12 rounded-2xl border border-white/80 bg-white/80 px-3 py-2 text-xs font-bold text-moove-orange shadow-lg backdrop-blur sm:-left-8">Built for the road</div>
+            <div className="absolute -right-1 bottom-12 rounded-2xl border border-white/80 bg-white/80 px-3 py-2 text-xs font-bold text-moove-purple shadow-lg backdrop-blur sm:-right-8">Rooted in resilience</div>
+            <div className="relative z-10 animate-float" style={{ filter: 'drop-shadow(0 24px 24px rgba(137, 65, 19, 0.22))' }}><img src={mascotImg} alt="Moo, MOOVE’s welcoming carabao wellness companion" className="h-72 w-72 object-contain sm:h-80 sm:w-80" loading="lazy" /></div>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-1">
+            {mooStories.map((story, index) => (
+              <article key={story.title} className={`group relative overflow-hidden rounded-3xl border border-white/80 bg-white/70 p-6 shadow-[0_12px_36px_rgba(62,31,13,0.08)] backdrop-blur-md transition-all duration-300 hover:-translate-y-1.5 hover:bg-white hover:shadow-[0_20px_44px_rgba(62,31,13,0.13)] why-moo-reveal ${visible ? 'is-visible' : ''}`} style={{ transitionDelay: `${180 + index * 110}ms` }}>
+                <div className="absolute inset-y-0 left-0 w-1" style={{ background: story.accent }} />
+                <div className="flex gap-4"><div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl text-2xl" style={{ background: `${story.accent}18` }} aria-hidden="true">{story.icon}</div><div><h3 className="font-display text-xl font-black text-moove-brown">{story.title}</h3><p className="mt-2 text-sm leading-relaxed text-moove-muted">{story.description}</p><p className="mt-3 text-sm font-semibold leading-relaxed" style={{ color: story.accent }}>{story.detail}</p></div></div>
+              </article>
+            ))}
+          </div>
+        </div>
+
+        <blockquote className={`relative mt-14 overflow-hidden rounded-3xl border border-white/40 bg-moove-brown px-7 py-9 text-center text-white shadow-xl sm:px-12 why-moo-reveal ${visible ? 'is-visible' : ''}`} style={{ transitionDelay: '540ms' }}>
+          <div className="absolute inset-0 opacity-75" style={{ background: 'radial-gradient(circle at 15% 30%, rgba(249,115,22,0.62), transparent 30%), radial-gradient(circle at 85% 70%, rgba(168,85,247,0.55), transparent 28%)' }} aria-hidden="true" />
+          <div className="relative"><span className="font-display text-6xl leading-none text-moove-yellow" aria-hidden="true">“</span><p className="mx-auto max-w-3xl font-display text-2xl font-extrabold leading-snug sm:text-3xl">Because every healthy journey begins with one small move.</p><footer className="mt-4 text-sm font-semibold text-white/65">— Moo, your wellness companion</footer></div>
+        </blockquote>
+      </div>
+    </section>
+  )
+}
+
 function Marquee() {
   const doubled = [...marqueeItems, ...marqueeItems]
   return (
@@ -668,6 +731,7 @@ export default function LandingPage() {
     <div className="min-h-screen" style={{ fontFamily: "'Outfit', sans-serif" }}>
       <Navbar />
       <Hero />
+      <WhyMoo />
       <Marquee />
       <Stats />
       <Ecosystem />
